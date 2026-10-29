@@ -189,28 +189,6 @@ defmodule Jarvis2.Runs do
 
   def focus_run(%Run{} = run), do: Launcher.focus(run)
 
-  @doc "An agent's own report (via MCP) of how it is doing."
-  def report_status(run_id, state, summary) when state in ["working", "blocked", "done"] do
-    with %Run{} = run <- get_run(run_id), true <- Run.active?(run) do
-      updated = progress(run, %{status: String.to_existing_atom(state)})
-
-      # The summary is kept (bounded) because the user started this run and wants to read it.
-      Journal.record(%{
-        source: :mcp,
-        type: "run.report",
-        run_id: run.id,
-        payload: %{state: state, status_summary: summary}
-      })
-
-      {:ok, updated}
-    else
-      _ -> {:error, "The run is not active."}
-    end
-  end
-
-  def report_status(_run_id, _state, _summary),
-    do: {:error, "state must be working, blocked or done"}
-
   @doc "An agent's final result (via MCP): finishes the run and cancels open questions."
   def submit_result(run_id, summary, artifacts) do
     with %Run{} = run <- get_run(run_id), true <- Run.active?(run) do

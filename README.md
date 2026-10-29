@@ -67,14 +67,15 @@ Every page except `/login`, `/healthz`, `/status` and `/mcp` needs a session.
 ## MCP tools
 
 The MCP endpoint (`/mcp`, streamable HTTP) is unauthenticated. Run-only tools resolve the active run
-from the pane header. Every tool has a UI surface or is agent-only:
+from the pane header. Agent state comes from Herdr; pending questions and approvals appear on the
+run page and in `/inbox`, even while Herdr shows the agent as working. Every tool has a UI surface
+or is agent-only:
 
 | Tool                                               | Where you see it                                                        |
 | -------------------------------------------------- | ----------------------------------------------------------------------- |
 | `whoami`, `log`, `wait_for_event`, `notify_human`  | agent-only (calls appear in `/events`)                                  |
 | `blackboard_put/get/list`                          | `/blackboard`                                                           |
 | `list_agents`, `get_layout`, `list_worktrees`      | `/`                                                                     |
-| `report_status`                                    | run status and timeline; sidebar token when `sidebar_tokens` is enabled |
 | `read_agent`                                       | agent-only                                                              |
 | `prompt_agent`, `spawn_agent`, `run_command`       | `fleet.*` rows in `/events`                                             |
 | `apply_layout`                                     | _Apply dev layout_ on `/`                                               |
@@ -106,8 +107,7 @@ result submission or when the run stops, fails or is lost; a run may have five o
 - **Same guards for UI and MCP.** UI actions act as the system caller `ui` through the execution and prompt
   guards and are audited as `fleet.*` events; they skip only the "caller must be a detected agent" check.
 - **Redaction.** Prompt, command and summary text, blackboard values and matched output lines are never stored in
-  the journal (only their sizes); credential-looking keys and bearer strings are masked. A run's own
-  `report_status` summaries are the exception, because you started that run.
+  the journal (only their sizes); credential-looking keys and bearer strings are masked.
 
 Existing PoC safeguards remain: `prompt_agent` needs a fresh mirror and a detected caller, targets only a ready
 agent in the same workspace, refuses self-prompts and cycles, and allows four attempts a minute per caller;
@@ -128,7 +128,7 @@ Enabled from Settings, each records `automation.*` rows in the journal:
   a sanitised tail on failure (three failures per pane, 20 s apart). Runs project code; the tail may contain
   secrets printed by tests.
 - `output_watcher`: notification when watched pane output matches.
-- `sidebar_tokens` / `pane_hygiene`: `$jarvis`, `$agent_state` and `$last_tool` sidebar tokens (60 s TTL) and
+- `sidebar_tokens` / `pane_hygiene`: `$agent_state` and `$last_tool` sidebar tokens (60 s TTL) and
   pane/tab renaming, which can overwrite manual labels; see `examples/herdr-config.snippet.toml`.
 - `custom_worker`: shows a running `run_mix` job as a `jarvis2-mix` agent on the server's own pane.
 - `declarative_layout`: the _dev_ layout, a **new** tab with three labelled shells.

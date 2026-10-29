@@ -9,7 +9,7 @@ tab_bar_right = [
 [ui.sidebar.agents]
 rows = [
   ["state_icon", "workspace", "tab"],
-  ["agent", "$jarvis", "$agent_state"],
+  ["agent", "$agent_state"],
 ]
 
 [ui.sidebar.spaces]

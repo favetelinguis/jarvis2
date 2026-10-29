@@ -122,24 +122,6 @@ defmodule Jarvis2.MCPRunTest do
     end
   end
 
-  test "report_status updates the run and keeps the summary for the user", ctx do
-    session = start_session(ctx, ctx.pane)
-
-    assert %{"run_status" => "blocked"} =
-             call(ctx, session, "report_status", %{state: "blocked", summary: "need a decision"})
-
-    assert Runs.get_run(ctx.run.id).status == :blocked
-
-    event = Enum.find(Journal.recent(run_id: ctx.run.id), &(&1.type == "run.report"))
-    assert event.payload == %{"state" => "blocked", "status_summary" => "need a decision"}
-
-    assert {:error, _} =
-             call_error(ctx, session, "report_status", %{
-               state: "blocked",
-               summary: String.duplicate("x", 257)
-             })
-  end
-
   test "submit_result keeps the pane usable until the run is stopped", ctx do
     session = start_session(ctx, ctx.pane)
     %{"ticket" => id} = call(ctx, session, "ask_human", %{prompt: "still open"})

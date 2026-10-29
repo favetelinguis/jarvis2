@@ -21,8 +21,6 @@ defmodule Jarvis2.MCP.Server do
     {"get_layout", "Inspect the current session layout.",
      %{workspace: :string, format: {:enum, ["tree", "json"]}}},
     {"list_worktrees", "List discovered worktrees per repository.", %{repo: :string}},
-    {"report_status", "Report working, blocked, or done for your pane.",
-     %{state: {:required, {:enum, ["working", "blocked", "done"]}}, summary: {:required, :string}}},
     {"notify_human", "Send a notification through Herdr (dry-run by default).",
      %{title: {:required, :string}, body: :string, sound: :boolean}},
     {"read_agent", "Read recent output from a Herdr agent.",

@@ -3,7 +3,7 @@ defmodule Jarvis2.MCP.Tools do
   require Logger
   alias Jarvis2.{Fleet, Questions, Runs}
   alias Jarvis2.Herdr.{Actions, Client, Mirror, Socket}
-  alias Jarvis2.MCP.{EventWait, Identity}
+  alias Jarvis2.MCP.EventWait
 
   def call("whoami", _args, caller) do
     mode = if Application.get_env(:jarvis2, :live, false), do: "live", else: "dry"
@@ -127,43 +127,6 @@ defmodule Jarvis2.MCP.Tools do
       when name in ~w(ask_human request_approval wait_for_answer submit_result),
       do: {:error, "no run for this pane"}
 
-  def call("report_status", args, %{run_id: run_id} = caller) when is_binary(run_id) do
-    state = value(args, :state)
-    summary = value(args, :summary)
-
-    with true <- byte_size(summary) <= 256 || {:error, "summary is too long"},
-         {:ok, _run} <- Runs.report_status(run_id, state, summary) do
-      sidebar =
-        if caller.pane == "unknown",
-          do: {:ok, :skipped},
-          else: call("report_status", args, Map.delete(caller, :run_id))
-
-      {:ok, %{run_status: state, sidebar: sidebar_result(sidebar)}}
-    end
-  end
-
-  def call("report_status", args, %{pane: pane} = caller) when pane != "unknown" do
-    summary = value(args, :summary)
-
-    if byte_size(summary) <= 256 do
-      view = Mirror.get(Application.get_env(:jarvis2, :mirror, Mirror))
-
-      verified =
-        Identity.resolve(%{"x-herdr-pane" => pane, "x-herdr-workspace" => caller.workspace}, view)
-
-      if verified.pane == pane and verified.workspace == caller.workspace and
-           verified.agent_kind == caller.agent_kind and verified.agent_name == caller.agent_name do
-        report_sidebar(verified, value(args, :state), summary)
-      else
-        {:error, "caller pane is unavailable or stale"}
-      end
-    else
-      {:error, "summary is too long"}
-    end
-  end
-
-  def call("report_status", _args, _caller), do: {:error, "caller pane is unknown"}
-
   def call("notify_human", args, caller) do
     title = value(args, :title)
     body = value(args, :body)
@@ -282,36 +245,6 @@ defmodule Jarvis2.MCP.Tools do
     end
   end
 
-  defp report_sidebar(verified, state, summary) do
-    summary = summary |> String.replace(~r/[\p{C}\s]+/u, " ") |> String.trim()
-
-    params = %{
-      pane_id: verified.pane,
-      source: "custom:jarvis2",
-      tokens: %{jarvis: "#{state}: #{summary}"},
-      ttl_ms: 60_000
-    }
-
-    socket = Application.get_env(:jarvis2, :herdr_socket, Socket)
-
-    case Actions.call(:sidebar_tokens, "pane.report_metadata", params,
-           caller: verified.pane,
-           server: socket
-         ) do
-      {:ok, result} ->
-        Phoenix.PubSub.local_broadcast(
-          Jarvis2.PubSub,
-          "mcp:status_reported",
-          {:jarvis2, "mcp:status_reported", %{caller: verified, summary: summary}}
-        )
-
-        {:ok, result}
-
-      error ->
-        action_result(error)
-    end
-  end
-
   defp ask(run_id, kind, attrs) do
     case Questions.ask(run_id, Map.put(attrs, :kind, kind)) do
       {:ok, question} ->
@@ -329,10 +262,6 @@ defmodule Jarvis2.MCP.Tools do
     base = %{ticket: question.id, status: Atom.to_string(question.status)}
     if question.status == :answered, do: Map.put(base, :answer, question.answer), else: base
   end
-
-  defp sidebar_result({:ok, :skipped}), do: "skipped"
-  defp sidebar_result({:ok, result}), do: result
-  defp sidebar_result({:error, _}), do: "unavailable"
 
   defp value(args, key), do: Map.get(args, key, Map.get(args, Atom.to_string(key)))
   defp valid_key?(key), do: is_binary(key) and byte_size(key) in 1..256

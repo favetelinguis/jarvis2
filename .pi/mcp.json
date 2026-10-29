@@ -10,7 +10,6 @@
       "exposure": "codemode",
       "toolExposure": {
         "whoami": "direct",
-        "report_status": "direct",
         "notify_human": "direct",
         "ask_human": "direct",
         "request_approval": "direct",

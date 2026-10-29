@@ -73,13 +73,7 @@ defmodule Jarvis2.PresentationTest do
     Phoenix.PubSub.local_broadcast(
       Jarvis2.PubSub,
       "mcp:tool_call",
-      {:jarvis2, "mcp:tool_call", %{caller: caller, tool: "report_status", outcome: "ok"}}
-    )
-
-    Phoenix.PubSub.local_broadcast(
-      Jarvis2.PubSub,
-      "mcp:status_reported",
-      {:jarvis2, "mcp:status_reported", %{caller: caller, summary: "ship feature"}}
+      {:jarvis2, "mcp:tool_call", %{caller: caller, tool: "ask_human", outcome: "ok"}}
     )
 
     Phoenix.PubSub.local_broadcast(
@@ -122,7 +116,7 @@ defmodule Jarvis2.PresentationTest do
                       "method" => "workspace.report_metadata",
                       "params" => %{
                         "workspace_id" => "w1",
-                        "tokens" => %{"last_tool" => "report_status"},
+                        "tokens" => %{"last_tool" => "ask_human"},
                         "ttl_ms" => 60_000
                       }
                     }},
@@ -131,7 +125,7 @@ defmodule Jarvis2.PresentationTest do
     assert_receive {:write,
                     %{
                       "method" => "pane.rename",
-                      "params" => %{"pane_id" => "w1:p1", "label" => "pi: ship feature"}
+                      "params" => %{"pane_id" => "w1:p1", "label" => "pi"}
                     }},
                    1_000
 
@@ -174,12 +168,6 @@ defmodule Jarvis2.PresentationTest do
        %{
          data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent_status" => "done"}
        }}
-    )
-
-    Phoenix.PubSub.local_broadcast(
-      Jarvis2.PubSub,
-      "mcp:status_reported",
-      {:jarvis2, "mcp:status_reported", %{caller: caller, summary: "wrong workspace"}}
     )
 
     refute_receive {:write, _}, 150
@@ -259,8 +247,9 @@ defmodule Jarvis2.PresentationTest do
 
     Phoenix.PubSub.local_broadcast(
       Jarvis2.PubSub,
-      "mcp:status_reported",
-      {:jarvis2, "mcp:status_reported", %{caller: caller, summary: "task"}}
+      "herdr:pane.agent_detected",
+      {:jarvis2, "herdr:pane.agent_detected",
+       %{data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent" => "pi"}}}
     )
 
     refute_receive {:write, _}, 100

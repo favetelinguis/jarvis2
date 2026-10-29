@@ -17,7 +17,7 @@ defmodule Jarvis2.Automations.Presentation do
   @impl true
   def init(opts) do
     for topic <-
-          ~w(herdr:pane.agent_status_changed herdr:pane.agent_detected mcp:tool_call mcp:status_reported mirror:updated),
+          ~w(herdr:pane.agent_status_changed herdr:pane.agent_detected mcp:tool_call mirror:updated),
         do: Phoenix.PubSub.subscribe(Jarvis2.PubSub, topic)
 
     {:ok,
@@ -62,24 +62,6 @@ defmodule Jarvis2.Automations.Presentation do
     end
   end
 
-  def handle_info({:jarvis2, "mcp:status_reported", %{caller: caller, summary: summary}}, state)
-      when is_map(caller) and is_binary(summary) and byte_size(summary) <= 256 do
-    if valid_id?(caller[:pane]) and valid_id?(caller[:workspace]) and
-         valid_kind?(caller[:agent_kind]) do
-      entry = %{
-        pane: caller.pane,
-        workspace: caller.workspace,
-        kind: caller.agent_kind,
-        name: caller[:agent_name],
-        summary: summary
-      }
-
-      {:noreply, enqueue(state, {:hygiene, caller.pane}, entry)}
-    else
-      {:noreply, state}
-    end
-  end
-
   def handle_info({:jarvis2, "herdr:pane.agent_detected", %{data: data}}, state)
       when is_map(data) do
     pane = data["pane_id"]
@@ -87,18 +69,8 @@ defmodule Jarvis2.Automations.Presentation do
     kind = data["agent"]
 
     if valid_id?(pane) and valid_id?(workspace) and valid_kind?(kind) and data["released"] != true do
-      key = {:hygiene, pane}
-      entry = %{pane: pane, workspace: workspace, kind: kind, name: nil, summary: nil}
-      # Preserve an already-queued task summary for the same agent.
-      state =
-        if match?(
-             %{kind: ^kind, workspace: ^workspace, summary: summary} when is_binary(summary),
-             state.pending[key]
-           ),
-           do: state,
-           else: enqueue(state, key, entry)
-
-      {:noreply, state}
+      entry = %{pane: pane, workspace: workspace, kind: kind}
+      {:noreply, enqueue(state, {:hygiene, pane}, entry)}
     else
       {:noreply, state}
     end
@@ -189,12 +161,9 @@ defmodule Jarvis2.Automations.Presentation do
     caller = resolve(entry, view)
     agent = find_agent(view, entry.pane)
 
-    if caller.pane != "unknown" and is_map(agent) and agent["agent"] == entry.kind and
-         (is_nil(entry.name) or agent["name"] == entry.name) do
+    if caller.pane != "unknown" and is_map(agent) and agent["agent"] == entry.kind do
       pane = Enum.find(view.snapshot["panes"], &(&1["pane_id"] == entry.pane))
-      kind = clean(entry.kind, 32)
-      summary = clean(entry.summary, 64)
-      label = if summary == "", do: kind, else: kind <> ": " <> summary
+      label = clean(entry.kind, 32)
 
       if label != "" and pane["label"] != label do
         write(

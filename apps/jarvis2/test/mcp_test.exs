@@ -89,7 +89,7 @@ defmodule Jarvis2.MCPTest do
     assert Enum.all?(~w(ask_human request_approval wait_for_answer submit_result), &(&1 in names))
 
     assert Enum.all?(
-             ~w(whoami log blackboard_put blackboard_get blackboard_list list_agents get_layout list_worktrees report_status notify_human read_agent prompt_agent wait_for_event run_mix apply_layout),
+             ~w(whoami log blackboard_put blackboard_get blackboard_list list_agents get_layout list_worktrees notify_human read_agent prompt_agent wait_for_event run_mix apply_layout),
              &(&1 in names)
            )
 
@@ -121,10 +121,6 @@ defmodule Jarvis2.MCPTest do
            ]
 
     assert call_tool(ctx, headers, "notify_human", %{title: "hello"})["dry_run"] == true
-
-    assert call_tool(ctx, headers, "report_status", %{state: "working", summary: "testing"})[
-             "dry_run"
-           ] == true
 
     {200, _, %{"result" => %{"resources" => resources}}} =
       rpc(ctx, headers, %{jsonrpc: "2.0", id: 3, method: "resources/list"})
@@ -177,19 +173,6 @@ defmodule Jarvis2.MCPTest do
     {200, _, %{"error" => _}} =
       rpc(ctx, headers, %{
         jsonrpc: "2.0",
-        id: 3,
-        method: "tools/call",
-        params: %{name: "report_status", arguments: %{state: "bad", summary: "x"}}
-      })
-
-    assert Enum.any?(
-             Jarvis2.Journal.recent(source: :mcp),
-             &match?(%{type: "tool.report_status", outcome: :error}, &1)
-           )
-
-    {200, _, %{"error" => _}} =
-      rpc(ctx, headers, %{
-        jsonrpc: "2.0",
         id: 5,
         method: "tools/call",
         params: %{name: "blackboard_put", arguments: %{key: "missing"}}
@@ -199,14 +182,6 @@ defmodule Jarvis2.MCPTest do
              Jarvis2.Journal.recent(source: :mcp),
              &match?(%{type: "tool.blackboard_put", outcome: :error}, &1)
            )
-
-    {200, _, %{"result" => %{"isError" => true}}} =
-      rpc(ctx, headers, %{
-        jsonrpc: "2.0",
-        id: 4,
-        method: "tools/call",
-        params: %{name: "report_status", arguments: %{state: "working", summary: "x"}}
-      })
   end
 
   test "log redacts common credentials", ctx do
@@ -282,95 +257,18 @@ defmodule Jarvis2.MCPTest do
       })
   end
 
-  test "report_status updates sidebar and schedules pane hygiene for the resolved caller", ctx do
-    path =
-      Path.join(
-        Application.fetch_env!(:jarvis2, :state_dir),
-        "mcp-status-#{System.unique_integer([:positive])}"
-      )
-
-    parent = self()
-
-    handler = fn request ->
-      send(parent, {:herdr_status, request})
-      {:reply, %{result: %{type: "ok"}}}
-    end
-
-    {:ok, _fake, listener} = Jarvis2.Test.FakeHerdr.start_link(path, handler)
-    {:ok, socket} = start_supervised({Jarvis2.Herdr.Socket, [path: path, name: nil]})
-
-    on_exit(fn ->
-      :gen_tcp.close(listener)
-      File.rm(path)
-    end)
-
-    replace_config(:herdr_socket, socket)
-    replace_config(:live, true)
-    replace_config(:live_scenarios, [:sidebar_tokens, :pane_hygiene])
-
-    start_supervised!(
-      {Jarvis2.Automations.Presentation,
-       [name: nil, mirror: ctx.mirror, socket: socket, debounce_ms: 20]}
-    )
-
+  test "report_status is not available", ctx do
     {session, protocol} = initialize(ctx)
-
-    headers = [
-      {"mcp-session-id", session},
-      {"mcp-protocol-version", protocol},
-      {"x-herdr-pane", "w1:p1"},
-      {"x-herdr-workspace", "w1"}
-    ]
-
+    headers = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]
     rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
 
-    log =
-      ExUnit.CaptureLog.capture_log(fn ->
-        assert call_tool(ctx, headers, "report_status", %{
-                 state: "working",
-                 summary: "building\nfeature"
-               })["type"] == "ok"
-
-        assert_receive {:herdr_status,
-                        %{
-                          "method" => "pane.report_metadata",
-                          "params" => %{
-                            "pane_id" => "w1:p1",
-                            "tokens" => %{"jarvis" => "working: building feature"}
-                          }
-                        }},
-                       1_000
-
-        assert_receive {:herdr_status,
-                        %{
-                          "method" => "pane.rename",
-                          "params" => %{"pane_id" => "w1:p1", "label" => "pi: building feature"}
-                        }},
-                       1_000
-
-        assert_receive {:herdr_status,
-                        %{
-                          "method" => "workspace.report_metadata",
-                          "params" => %{
-                            "workspace_id" => "w1",
-                            "tokens" => %{"last_tool" => "report_status"}
-                          }
-                        }},
-                       1_000
-      end)
-
-    refute log =~ "building"
-    GenServer.call(ctx.mirror, :arm_stale)
-
-    {200, _, %{"result" => %{"isError" => true}}} =
-      rpc(ctx, headers, %{
-        jsonrpc: "2.0",
-        id: 32,
-        method: "tools/call",
-        params: %{name: "report_status", arguments: %{state: "done", summary: "stale"}}
-      })
-
-    refute_receive {:herdr_status, _}, 150
+    assert {200, _, %{"error" => %{"data" => %{"message" => "Tool not found: report_status"}}}} =
+             rpc(ctx, headers, %{
+               jsonrpc: "2.0",
+               id: 32,
+               method: "tools/call",
+               params: %{name: "report_status", arguments: %{state: "working", summary: "x"}}
+             })
   end
 
   test "apply_layout returns a dry-run plan for the calling workspace", ctx do

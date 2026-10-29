@@ -12,5 +12,6 @@ defmodule Jarvis2.PiConfigTest do
     refute Map.has_key?(server["headers"], "Authorization")
     assert server["toolExposure"]["whoami"] == "direct"
     refute Map.has_key?(server["toolExposure"], "elixir_eval")
+    refute Map.has_key?(server["toolExposure"], "report_status")
   end
 end
