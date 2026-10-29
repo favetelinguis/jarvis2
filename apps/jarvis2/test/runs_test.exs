@@ -115,7 +115,9 @@ defmodule Jarvis2.RunsTest do
       assert_receive {:request, "agent.start", start}
       assert start["pane_id"] == "w1:p9"
       assert start["kind"] == "pi"
-      assert start["args"] == ~w(--provider openrouter --model openai/gpt-6-luna --thinking low)
+
+      assert start["args"] ==
+               ~w(--provider openrouter --model openai/gpt-6-luna --thinking low --extension /home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js)
 
       assert_receive {:request, "agent.prompt", %{"target" => "w1:p9", "text" => text}}
       assert text =~ ~s(run "demo")

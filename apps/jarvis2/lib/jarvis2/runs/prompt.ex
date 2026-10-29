@@ -3,7 +3,7 @@ defmodule Jarvis2.Runs.Prompt do
 
   def build(run) do
     """
-    You are running as Jarvis2 run "#{run.name}". Jarvis2's MCP server (`jarvis2`) is available:
+    You are running as Jarvis2 run "#{run.name}". Jarvis2's MCP server (`jarvis2_run`) is available:
     Jarvis2 observes your state automatically; use these tools to reach the human and finish:
     - ask_human(prompt, options?): ask a question. It returns a ticket; call wait_for_answer(ticket)
       repeatedly until the status is no longer "pending".

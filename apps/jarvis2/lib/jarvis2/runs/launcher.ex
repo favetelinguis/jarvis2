@@ -10,6 +10,7 @@ defmodule Jarvis2.Runs.Launcher do
   alias Jarvis2.Runs.Run
 
   @workspace_label "jarvis2"
+  @pi_extension "/home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js"
   @ui %{system: "ui", pane: "system:ui"}
   @prompt_wait_ms 15_000
   @retryable ~w(target_unavailable target_not_ready caller_or_mirror_unavailable)
@@ -24,7 +25,17 @@ defmodule Jarvis2.Runs.Launcher do
   @doc "Pi-specific arguments; other agent kinds start with their own defaults."
   def agent_args(%Run{kind: "pi", model: model, thinking: thinking}) do
     [provider, model_id] = String.split(model, "/", parts: 2)
-    ["--provider", provider, "--model", model_id, "--thinking", thinking]
+
+    [
+      "--provider",
+      provider,
+      "--model",
+      model_id,
+      "--thinking",
+      thinking,
+      "--extension",
+      @pi_extension
+    ]
   end
 
   def agent_args(_run), do: []

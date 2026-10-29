@@ -37,17 +37,17 @@ A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bi
 2. **New run**: the form is prefilled with agent `pi`, model `openrouter/openai/gpt-6-luna`, thinking `low`.
    Give it a task, for example _Ask me which file to change, then ask for approval before editing_.
 3. Jarvis2 splits a pane next to the anchor pane, starts Pi there with
-   `--provider openrouter --model openai/gpt-6-luna --thinking low`, and delivers the task. The run page
+   `--provider openrouter --model openai/gpt-6-luna --thinking low` and a Jarvis2 MCP extension, and delivers the task. The run page
    shows status and a live timeline. The agent's questions appear as cards on the run
    page and in the **Inbox**; answering unblocks it. `submit_result` finishes the run.
 
 `MODEL=luna scripts/live-tour.sh` sets up an isolated Herdr session for a manual showcase
 (it uses your real Pi configuration and OpenRouter credits).
 
-For an agent to call Jarvis2's tools, Pi needs the `jarvis2` MCP server. The repository's `.pi/mcp.json`
-(used after Pi project trust) sends `X-Herdr-Pane` and `X-Herdr-Workspace` from the pane environment.
-For runs started in other directories, add the same `jarvis2` entry, including those headers, to
-`~/.pi/agent/mcp.json`.
+Pi runs explicitly load `.pi/jarvis2-run.js`, which registers the `jarvis2_run` MCP server using the
+run's URL and Herdr pane headers, regardless of the run's working directory. Its path is temporarily
+hardcoded to `/home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js`. Other Pi sessions can use the
+repository's `.pi/mcp.json` after project trust, or add its `jarvis2` entry to `~/.pi/agent/mcp.json`.
 
 ## Screens
 
