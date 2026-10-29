@@ -1,6 +1,5 @@
 defmodule Jarvis2.ExecutionTest do
   use ExUnit.Case, async: false
-  import ExUnit.CaptureLog
 
   defmodule Mirror do
     use GenServer
@@ -230,170 +229,6 @@ defmodule Jarvis2.ExecutionTest do
     assert {:ok, _} = Task.await(stream, 2_000)
   end
 
-  test "live picker answers one authenticated request without logging its contents", ctx do
-    config(:live, true)
-    config(:live_scenarios, [:human_picker])
-    config(:port, ctx.port)
-    h = session(ctx)
-
-    log =
-      capture_log(fn ->
-        task =
-          Task.async(fn ->
-            call(ctx, h, "ask_human", %{
-              question: "private question?",
-              choices: ["private choice", "second"],
-              timeout_s: 5
-            })
-          end)
-
-        assert_receive {:request, "plugin.pane.open", params}, 2_000
-        assert params["entrypoint"] == "picker"
-        refute Map.has_key?(params, "target_pane_id")
-        id = params["env"]["JARVIS2_PICKER_ID"]
-        assert {401, _} = picker_request(ctx, id, :get, nil, false)
-
-        assert {200,
-                %{"question" => "private question?", "choices" => ["private choice", "second"]}} =
-                 picker_request(ctx, id, :get)
-
-        assert {400, _} = picker_request(ctx, id, :post, %{index: 2})
-        assert {200, _} = picker_request(ctx, id, :post, %{index: 0})
-
-        assert {:ok, %{"answer" => "private choice", "dry_run" => false}} =
-                 Task.await(task, 2_000)
-
-        assert {404, _} = picker_request(ctx, id, :get)
-        assert {400, _} = picker_request(ctx, id, :post, %{index: 0})
-      end)
-
-    refute log =~ "private question"
-    refute log =~ "private choice"
-    refute inspect(Jarvis2.State.recent_journal()) =~ "private question"
-  end
-
-  test "send-to-agent action asks for a target and message before a guarded prompt", ctx do
-    config(:live, true)
-    config(:live_scenarios, [:human_picker, :agent_prompt])
-    config(:port, ctx.port)
-
-    target_pane = %{
-      "pane_id" => "w1:p2",
-      "workspace_id" => "w1",
-      "tab_id" => "w1:t1",
-      "terminal_id" => "term2",
-      "cwd" => File.cwd!()
-    }
-
-    target =
-      Map.merge(target_pane, %{"agent" => "pi", "name" => "reviewer", "agent_status" => "idle"})
-
-    snapshot =
-      ctx.view.snapshot
-      |> Map.update!("panes", &(&1 ++ [target_pane]))
-      |> Map.update!("agents", &(&1 ++ [target]))
-
-    GenServer.call(ctx.mirror, {:put, %{ctx.view | snapshot: snapshot}})
-    start_supervised!({Jarvis2.Scenarios.SendToAgent, [name: nil]})
-    Jarvis2.Bus.subscribe("scenario:send_to_agent")
-
-    headers = [{"authorization", "Bearer " <> ctx.token}, {"content-type", "application/json"}]
-    body = Jason.encode!(%{context: %{workspace_id: "w1", focused_pane_id: "w1:p1"}})
-
-    request =
-      Finch.build(:post, "http://127.0.0.1:#{ctx.port}/hook/action/send-to-agent", headers, body)
-
-    assert {:ok, %{status: 202}} = Finch.request(request, Jarvis2.ExecutionTestFinch)
-    assert_receive {:request, "plugin.pane.open", first}, 2_000
-    id = first["env"]["JARVIS2_PICKER_ID"]
-    assert {200, %{"choices" => ["w1:p2"]}} = picker_request(ctx, id, :get)
-    assert {200, _} = picker_request(ctx, id, :post, %{index: 0})
-    assert_receive {:request, "plugin.pane.open", second}, 2_000
-
-    assert {200, _} =
-             picker_request(ctx, second["env"]["JARVIS2_PICKER_ID"], :post, %{
-               text: "review privately"
-             })
-
-    assert_receive {:request, "agent.prompt",
-                    %{"target" => "w1:p2", "text" => "review privately"}},
-                   2_000
-
-    assert_receive {:jarvis2, "scenario:send_to_agent", %{outcome: :ok}}, 2_000
-    refute inspect(Jarvis2.State.recent_journal()) =~ "review privately"
-  end
-
-  test "send-to-agent does not open a picker unless both scenarios are live", _ctx do
-    config(:live, true)
-    config(:live_scenarios, [:human_picker])
-    scenario = start_supervised!({Jarvis2.Scenarios.SendToAgent, [name: nil]})
-
-    Jarvis2.Web.Hooks.accept("action", "send-to-agent", %{
-      "context" => %{"workspace_id" => "w1", "focused_pane_id" => "w1:p1"}
-    })
-
-    :sys.get_state(scenario)
-    refute_receive {:request, "plugin.pane.open", _}, 150
-    refute_receive {:request, "agent.prompt", _}, 150
-  end
-
-  test "docs link action validates the URL and opens a gated popup", ctx do
-    config(:live, true)
-    config(:live_scenarios, [:docs_link])
-    start_supervised!({Jarvis2.Scenarios.DocsLink, [name: nil]})
-    Jarvis2.Bus.subscribe("scenario:docs_link")
-    headers = [{"authorization", "Bearer " <> ctx.token}, {"content-type", "application/json"}]
-
-    post = fn url ->
-      body =
-        Jason.encode!(%{
-          context: %{workspace_id: "w1", focused_pane_id: "w1:p1"},
-          clicked_url: url
-        })
-
-      request =
-        Finch.build(:post, "http://127.0.0.1:#{ctx.port}/hook/action/docs-link", headers, body)
-
-      assert {:ok, %{status: 202}} = Finch.request(request, Jarvis2.ExecutionTestFinch)
-    end
-
-    post.("https://hexdocs.pm@evil.example/secret")
-    post.("https://hexdocs.pm:invalid/elixir/Enum.html")
-    refute_receive {:request, "plugin.pane.open", _}, 100
-
-    log =
-      capture_log(fn ->
-        post.("https://hexdocs.pm/elixir/Enum.html?secret=private")
-        assert_receive {:request, "plugin.pane.open", params}, 2_000
-        assert params["entrypoint"] == "docs"
-
-        assert params["env"]["JARVIS2_DOCS_URL"] ==
-                 "https://hexdocs.pm/elixir/Enum.html?secret=private"
-
-        assert_receive {:jarvis2, "scenario:docs_link", %{outcome: :ok}}, 2_000
-      end)
-
-    refute log =~ "private"
-  end
-
-  test "live picker timeout makes its popup request unavailable", ctx do
-    config(:live, true)
-    config(:live_scenarios, [:human_picker])
-    config(:port, ctx.port)
-    h = session(ctx)
-
-    task =
-      Task.async(fn ->
-        call(ctx, h, "ask_human", %{question: "Choose", choices: ["one"], timeout_s: 1})
-      end)
-
-    assert_receive {:request, "plugin.pane.open", params}, 2_000
-    id = params["env"]["JARVIS2_PICKER_ID"]
-    assert {:error, message} = Task.await(task, 3_000)
-    assert message =~ "timed out"
-    assert {404, _} = picker_request(ctx, id, :get)
-  end
-
   test "separate live gates do not enable execution", ctx do
     config(:live, true)
     config(:live_scenarios, [:agent_spawn])
@@ -558,7 +393,6 @@ defmodule Jarvis2.ExecutionTest do
      }}
   end
 
-  defp respond("plugin.pane.open", _, _, _), do: {:reply, %{result: %{type: "ok"}}}
   defp respond("pane.send_input", _, _, _), do: {:reply, %{result: %{type: "ok"}}}
 
   defp respond("pane.wait_for_output", %{"pane_id" => pane}, _, _),
@@ -615,22 +449,6 @@ defmodule Jarvis2.ExecutionTest do
 
   defp respond(_, _, _, _),
     do: {:reply, %{error: %{code: "unexpected_method", message: "unexpected"}}}
-
-  defp picker_request(ctx, id, method, body \\ nil, authorized \\ true) do
-    headers = if authorized, do: [{"authorization", "Bearer " <> ctx.token}], else: []
-    headers = [{"content-type", "application/json"} | headers]
-
-    req =
-      Finch.build(
-        method,
-        "http://127.0.0.1:#{ctx.port}/picker/#{id}",
-        headers,
-        if(body, do: Jason.encode!(body), else: nil)
-      )
-
-    {:ok, response} = Finch.request(req, Jarvis2.ExecutionTestFinch)
-    {response.status, Jason.decode!(response.body)}
-  end
 
   defp receive_progress(_buffer, events) when length(events) >= 3, do: events
 

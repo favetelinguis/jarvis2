@@ -1,7 +1,0 @@
-#!/bin/sh
-set -eu
-PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:/usr/bin:/bin"
-export PATH
-root=${HERDR_PLUGIN_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
-cd "$root"
-exec mise exec -- iex --sname jarvis2 -S mix

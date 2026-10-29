@@ -201,30 +201,6 @@ defmodule Jarvis2.MCP.Tools do
   def call("run_mix", args, _caller), do: MixRunner.run(value(args, :task), value(args, :project))
   def call("elixir_eval", args, _caller), do: Eval.run(value(args, :code))
 
-  def call("ask_human", args, caller) do
-    question = value(args, :question)
-    choices = value(args, :choices) || []
-    timeout = value(args, :timeout_s) || 30
-
-    valid =
-      is_binary(question) and byte_size(question) in 1..4_096 and is_list(choices) and
-        length(choices) <= 10 and Enum.all?(choices, &(is_binary(&1) and byte_size(&1) in 1..256)) and
-        is_integer(timeout) and timeout in 1..110
-
-    cond do
-      not valid ->
-        {:error, "question, choices, or timeout is invalid"}
-
-      Application.get_env(:jarvis2, :live, false) and
-          :human_picker in Application.get_env(:jarvis2, :live_scenarios, []) ->
-        Jarvis2.MCP.Picker.ask(question, choices, timeout, caller)
-
-      true ->
-        Logger.info("would ask human caller=#{inspect(caller.pane)} choices=#{length(choices)}")
-        {:ok, %{answer: List.first(choices), dry_run: true}}
-    end
-  end
-
   def call("run_command", args, caller, progress) do
     Actions.run_command(
       caller,

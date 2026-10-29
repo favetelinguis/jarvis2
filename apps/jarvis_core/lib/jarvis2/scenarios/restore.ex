@@ -1,5 +1,5 @@
 defmodule Jarvis2.Scenarios.Restore do
-  @moduledoc "Best-effort restore of this plugin's view and short-lived metadata."
+  @moduledoc "Best-effort restore of short-lived sidebar tokens."
   use GenServer
   require Logger
   alias Jarvis2.Herdr.{Actions, Mirror, Socket}
@@ -12,8 +12,6 @@ defmodule Jarvis2.Scenarios.Restore do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, if(name, do: [name: name], else: []))
   end
-
-  def record_focus(enabled) when is_boolean(enabled), do: record({:focus, enabled})
 
   def record_token(method, params, pane, view, expires_at) do
     if enabled?(:sidebar_tokens) do
@@ -51,7 +49,6 @@ defmodule Jarvis2.Scenarios.Restore do
       loaded: false,
       mirror: Keyword.get(opts, :mirror, Application.get_env(:jarvis2, :mirror, Mirror)),
       socket: Keyword.get(opts, :socket, Application.get_env(:jarvis2, :herdr_socket, Socket)),
-      focus_attempted: false,
       token_attempted: MapSet.new(),
       token_scheduled: false,
       expiry_timer: nil
@@ -62,12 +59,6 @@ defmodule Jarvis2.Scenarios.Restore do
   end
 
   @impl true
-  def handle_call({:record, {:focus, enabled}}, _from, state) do
-    state = load_session(state)
-    data = %{state.data | "focus" => enabled}
-    {:reply, :ok, save(%{state | data: data, focus_attempted: true})}
-  end
-
   def handle_call({:record, {:token, entry}}, _from, state) do
     state = load_session(state)
     now = System.system_time(:millisecond)
@@ -126,7 +117,7 @@ defmodule Jarvis2.Scenarios.Restore do
 
     case Mirror.get(state.mirror) do
       %{stale: false, snapshot: snapshot} when is_map(snapshot) ->
-        state |> restore_focus() |> schedule_tokens()
+        schedule_tokens(state)
 
       _ ->
         state
@@ -139,29 +130,6 @@ defmodule Jarvis2.Scenarios.Restore do
   end
 
   defp schedule_tokens(state), do: state
-
-  defp restore_focus(
-         %{session: session, focus_attempted: false, data: %{"focus" => true}} = state
-       )
-       when is_binary(session) do
-    if enabled?(:focus_mode) do
-      result =
-        Actions.call(:focus_mode, "agent.view.set", Jarvis2.FocusView.view(),
-          server: state.socket,
-          caller: "restore",
-          timeout: 2_000
-        )
-
-      if match?({:error, _}, result),
-        do: Logger.warning("Herdr focus restore failed; not retried")
-
-      %{state | focus_attempted: true}
-    else
-      state
-    end
-  end
-
-  defp restore_focus(state), do: state
 
   defp restore_one_token(%{session: session} = state, view) when is_binary(session) do
     now = System.system_time(:millisecond)
@@ -317,7 +285,7 @@ defmodule Jarvis2.Scenarios.Restore do
       {entry["scope"], entry["source"], entry["key"],
        if(entry["scope"] == "pane", do: entry["pane"], else: entry["workspace"])}
 
-  defp empty, do: %{"focus" => false, "tokens" => []}
+  defp empty, do: %{"tokens" => []}
 
   defp enabled?(scenario),
     do:
@@ -348,7 +316,6 @@ defmodule Jarvis2.Scenarios.Restore do
           | session: session,
             loaded: true,
             data: read_data(state.dir, session),
-            focus_attempted: false,
             token_attempted: MapSet.new()
         }
         |> prune_expired()
@@ -359,7 +326,6 @@ defmodule Jarvis2.Scenarios.Restore do
           | session: nil,
             loaded: false,
             data: empty(),
-            focus_attempted: false,
             token_attempted: MapSet.new()
         }
         |> schedule_expiry()
@@ -373,11 +339,11 @@ defmodule Jarvis2.Scenarios.Restore do
            File.lstat(path),
          true <- Bitwise.band(mode, 0o077) == 0,
          {:ok, contents} <- File.read(path),
-         {:ok, %{"version" => 1, "session" => ^session, "focus" => focus, "tokens" => tokens}}
-         when is_boolean(focus) and is_list(tokens) and length(tokens) <= @max_tokens <-
+         {:ok, %{"version" => 1, "session" => ^session, "tokens" => tokens}}
+         when is_list(tokens) and length(tokens) <= @max_tokens <-
            Jason.decode(contents),
          true <- Enum.all?(tokens, &valid_saved_token?/1) do
-      %{"focus" => focus, "tokens" => tokens}
+      %{"tokens" => tokens}
     else
       _ -> empty()
     end

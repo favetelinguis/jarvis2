@@ -45,9 +45,6 @@ defmodule Jarvis2.MCP.Server do
      }},
     {"apply_layout", "Create a new developer tab in your workspace (dry-run by default).",
      %{name: {:required, {:enum, ["dev"]}}}},
-    {"ask_human",
-     "Ask a human; dry mode returns the first choice, or open an opt-in live picker.",
-     %{question: {:required, :string}, choices: {:list, :string}, timeout_s: :integer}},
     {"elixir_eval",
      "Evaluate Elixir in this VM. Disabled unless explicitly enabled; not sandboxed.",
      %{code: {:required, :string}}}

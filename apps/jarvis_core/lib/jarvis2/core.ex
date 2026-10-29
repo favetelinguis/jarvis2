@@ -13,8 +13,7 @@ defmodule Jarvis2.Core do
       {Task.Supervisor, name: Jarvis2.TaskSupervisor},
       Jarvis2.Herdr.Mirror,
       Jarvis2.Herdr.PromptGuard,
-      Jarvis2.Herdr.ExecutionGuard,
-      Jarvis2.MCP.Picker
+      Jarvis2.Herdr.ExecutionGuard
     ]
   end
 end

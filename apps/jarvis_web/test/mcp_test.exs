@@ -86,9 +86,10 @@ defmodule Jarvis2.MCPTest do
       rpc(ctx, headers, %{jsonrpc: "2.0", id: 2, method: "tools/list"})
 
     names = Enum.map(tools, & &1["name"])
+    refute "ask_human" in names
 
     assert Enum.all?(
-             ~w(whoami log blackboard_put blackboard_get blackboard_list list_agents get_layout list_worktrees report_status notify_human read_agent prompt_agent wait_for_event run_mix ask_human elixir_eval apply_layout),
+             ~w(whoami log blackboard_put blackboard_get blackboard_list list_agents get_layout list_worktrees report_status notify_human read_agent prompt_agent wait_for_event run_mix elixir_eval apply_layout),
              &(&1 in names)
            )
 
@@ -789,31 +790,6 @@ defmodule Jarvis2.MCPTest do
         id: 15,
         method: "tools/call",
         params: %{name: "elixir_eval", arguments: %{code: "Process.sleep(5000)"}}
-      })
-  end
-
-  test "ask_human returns the first choice in dry mode", ctx do
-    {session, protocol} = initialize(ctx)
-    headers = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]
-    rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
-
-    assert call_tool(ctx, headers, "ask_human", %{question: "Choose?", choices: ["one", "two"]}) ==
-             %{"answer" => "one", "dry_run" => true}
-
-    assert call_tool(ctx, headers, "ask_human", %{question: "Open question?"}) == %{
-             "answer" => nil,
-             "dry_run" => true
-           }
-
-    replace_config(:live, true)
-    replace_config(:live_scenarios, [:human_picker])
-
-    {200, _, %{"result" => %{"isError" => true}}} =
-      rpc(ctx, headers, %{
-        jsonrpc: "2.0",
-        id: 17,
-        method: "tools/call",
-        params: %{name: "ask_human", arguments: %{question: "Choose?", choices: ["one"]}}
       })
   end
 

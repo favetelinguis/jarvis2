@@ -1,7 +1,7 @@
 #!/bin/bash
 # Scripted tour of the live workflows against an isolated Herdr session and a mock model.
 # Requires HERDR_ENV=1, herdr, pi, git, curl, python3 and mise/mix. It never touches the
-# default Herdr session, your Pi configuration, or globally linked plugins. Results are
+# default Herdr session or your Pi configuration. Results are
 # summarised as PASS/FAIL lines; the app log is kept in the printed temp dir on failure.
 set -u
 [ "${HERDR_ENV:-}" = 1 ] || { echo "HERDR_ENV=1 is required" >&2; exit 2; }
@@ -31,35 +31,25 @@ cleanup(){ herdr session stop "$n" >/dev/null 2>&1; herdr session delete "$n" >/
   if [ "$fail" = 0 ]; then rm -rf "$d"; else echo "kept $d"; fi; }
 trap cleanup EXIT
 for _ in $(seq 1 100); do herdr --session "$n" api snapshot >/dev/null 2>&1 && break; sleep .1; done
-herdr --session "$n" workspace create --cwd "$d/repo" --no-focus >/dev/null
+pane=$(herdr --session "$n" workspace create --cwd "$d/repo" --no-focus | python3 -c 'import json,sys;print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')
 sock=$(herdr session list --json | python3 -c 'import json,sys;print(next(s["socket_path"] for s in json.load(sys.stdin)["sessions"] if s["name"]==sys.argv[1]))' "$n")
 
 cd "$root"
-HERDR_SOCKET_PATH="$sock" JARVIS2_LIVE=1 JARVIS2_PORT=$jp HERDR_PLUGIN_STATE_DIR="$d/state" \
-  mix run --no-halt -e "Application.put_env(:jarvis2, :live_scenarios, [:worktree_task, :agent_spawn, :review_fanout, :run_command, :agent_prompt, :test_loop, :attention]); Application.put_env(:jarvis2, :worktree_root, \"$d/wt\"); Application.put_env(:jarvis2, :test_loop_roots, [\"$d\"])" >"$d/app.log" 2>&1 & app=$!
-for _ in $(seq 1 200); do curl -s -o /dev/null "http://127.0.0.1:$jp/" && break; sleep .2; done
+HERDR_SOCKET_PATH="$sock" JARVIS2_LIVE=1 JARVIS2_PORT=$jp JARVIS2_STATE_DIR="$d/state" \
+  mix run --no-halt -e "Application.put_env(:jarvis2, :live_scenarios, [:run_command, :agent_prompt, :test_loop, :attention]); Application.put_env(:jarvis2, :test_loop_roots, [\"$d\"])" >"$d/app.log" 2>&1 & app=$!
+for _ in $(seq 1 200); do curl -s -o /dev/null "http://127.0.0.1:$jp/healthz" && break; sleep .2; done
+herdr --session "$n" agent start tour --kind pi --pane "$pane" >/dev/null || { echo "FAIL agent start"; fail=1; exit 1; }
 sleep 3
-token=$(cat "$d/state/token")
-post(){ curl -s -o /dev/null -X POST -H "authorization: Bearer $token" -H 'content-type: application/json' -d "$2" "http://127.0.0.1:$jp/hook/action/$1"; }
-ctx='{"workspace_id":"w1","focused_pane_id":"w1:p1"}'
-
-post issue-link "{\"context\":$ctx,\"clicked_url\":\"https://github.com/a/b/issues/7\"}"
-sleep 22
-post review-diff "{\"context\":$ctx}"
-sleep 20
-# Herdr's detector does not see Pi's mock turn, so report the lifecycle that triggers the test loop.
-herdr --session "$n" pane report-agent w2:p1 --source custom:tour --agent pi --state working >/dev/null
+# Herdr's detector does not see Pi's mock turn, so report the lifecycle explicitly.
+herdr --session "$n" pane report-agent "$pane" --source custom:tour --agent pi --state blocked >/dev/null
 sleep 2
-herdr --session "$n" pane report-agent w2:p1 --source custom:tour --agent pi --state idle >/dev/null
+herdr --session "$n" pane report-agent "$pane" --source custom:tour --agent pi --state working >/dev/null
+sleep 2
+herdr --session "$n" pane report-agent "$pane" --source custom:tour --agent pi --state idle >/dev/null
 sleep 45
 
-check "worktree workspace created"     'live :worktree_task "worktree.create".*outcome=ok'
-check "issue agent started"             'live agent.start caller="w1:p1" outcome=ok'
 check "attention notification accepted" 'live :attention "notification.show".*outcome=ok'
-check "review fan-out finished"         'review-diff finished reviews=2'
 check "test loop matched marker"        'test loop wait=matched'
 check "failure prompted to the agent"   'live :agent_prompt "agent.prompt" caller="system:test-loop" outcome=ok'
-grep -q 'Work on https://github.com/a/b/issues/7' "$d/requests.log" && echo "PASS agent received the issue" || { echo "FAIL agent received the issue"; fail=1; }
 grep -q 'failed (exit 2)' "$d/requests.log" && echo "PASS agent received test failure" || { echo "FAIL agent received test failure"; fail=1; }
-[ -d "$d/wt/repo/issue-7" ] && echo "PASS worktree checkout exists" || { echo "FAIL worktree checkout exists"; fail=1; }
 exit $fail

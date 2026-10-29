@@ -19,8 +19,8 @@ else
   config :jarvis2,
     port: port,
     state_dir:
-      System.get_env("HERDR_PLUGIN_STATE_DIR") ||
-        Path.expand("~/.local/state/herdr/plugins/favetelinguis.jarvis2"),
+      System.get_env("JARVIS2_STATE_DIR") ||
+        Path.expand("~/.local/state/jarvis2"),
     serve: true,
     live: System.get_env("JARVIS2_LIVE") == "1",
     allow_eval: System.get_env("JARVIS2_ALLOW_EVAL") == "1",
