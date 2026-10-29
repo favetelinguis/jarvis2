@@ -36,6 +36,7 @@ defmodule Jarvis2Web.DashboardLive do
   def render(assigns) do
     ~H"""
     <h1>Dashboard</h1>
+    <p><.link navigate="/runs/new">New run</.link></p>
     <div class={["banner", connection(@view) != :online && "banner-warn"]} id="connection">
       <.live_badge live={@live?} />
       <span>{connection_text(connection(@view))}</span>
@@ -47,7 +48,10 @@ defmodule Jarvis2Web.DashboardLive do
     <section :if={snapshot = @view[:snapshot]} class="tree" id="session">
       <h2>Session</h2>
       <ul>
-        <li :for={workspace <- snapshot["workspaces"] || []} id={"workspace-#{workspace["workspace_id"]}"}>
+        <li
+          :for={workspace <- snapshot["workspaces"] || []}
+          id={"workspace-#{workspace["workspace_id"]}"}
+        >
           <strong>{workspace["label"] || workspace["workspace_id"]}</strong>
           <ul>
             <li :for={tab <- tabs(snapshot, workspace)} id={"tab-#{tab["tab_id"]}"}>
@@ -70,7 +74,11 @@ defmodule Jarvis2Web.DashboardLive do
     <section :if={snapshot = @view[:snapshot]} id="agents">
       <h2>Agents</h2>
       <table>
-        <thead><tr><th>Name</th><th>Kind</th><th>Pane</th><th>Status</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Name</th><th>Kind</th><th>Pane</th><th>Status</th>
+          </tr>
+        </thead>
         <tbody>
           <tr :for={agent <- snapshot["agents"] || []} id={"agent-#{agent["pane_id"]}"}>
             <td>{agent["name"]}</td>
@@ -85,7 +93,11 @@ defmodule Jarvis2Web.DashboardLive do
     <section id="events-section">
       <h2>Recent events</h2>
       <table>
-        <thead><tr><th>Time</th><th>Source</th><th>Type</th><th>Outcome</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Time</th><th>Source</th><th>Type</th><th>Outcome</th>
+          </tr>
+        </thead>
         <tbody id="events" phx-update="stream">
           <tr :for={{id, event} <- @streams.events} id={id}>
             <td>{Calendar.strftime(event.inserted_at, "%H:%M:%S")}</td>

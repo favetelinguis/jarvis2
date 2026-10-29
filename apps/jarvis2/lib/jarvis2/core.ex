@@ -12,6 +12,8 @@ defmodule Jarvis2.Core do
       Jarvis2.Repo,
       {Ecto.Migrator, repos: Application.fetch_env!(:jarvis2, :ecto_repos)},
       Jarvis2.Journal.Pruner,
+      {Registry, keys: :unique, name: Jarvis2.Runs.TailRegistry},
+      {DynamicSupervisor, name: Jarvis2.Runs.TailSupervisor, strategy: :one_for_one},
       Jarvis2.Herdr.Socket,
       {Task.Supervisor, name: Jarvis2.TaskSupervisor},
       Jarvis2.Herdr.Mirror,

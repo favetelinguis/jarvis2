@@ -9,8 +9,7 @@ defmodule Jarvis2Web.LoginHTML do
       <h1>Jarvis2</h1>
       <p :if={@error} class="flash flash-error">{@error}</p>
       <p class="muted">
-        Open the sign-in link printed when the server started, or paste the API token from
-        <code>$JARVIS2_STATE_DIR/token</code>.
+        Open the sign-in link printed when the server started, or paste the API token from <code>$JARVIS2_STATE_DIR/token</code>.
       </p>
       <.form for={%{}} action="/login" class="stack">
         <input type="password" name="secret" placeholder="Sign-in code or token" autocomplete="off" />

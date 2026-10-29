@@ -25,7 +25,10 @@ defmodule Jarvis2Web.Router do
     delete("/logout", LoginController, :delete)
 
     live_session :authenticated, on_mount: {Jarvis2Web.Auth, :require_authenticated} do
-      live("/", DashboardLive)
+      live "/", DashboardLive
+      live "/runs", RunLive.Index
+      live "/runs/new", RunLive.New
+      live "/runs/:id", RunLive.Show
     end
   end
 end

@@ -84,24 +84,44 @@ defmodule Jarvis2.Runs.Launcher do
   end
 
   @doc "Closes the run's pane, but only if it is still the terminal that was created for it."
+  def close(%Run{pane_id: nil}), do: {:ok, :dry_run}
+
   def close(%Run{} = run) do
     with {:ok, view} <- fresh(current_view()) do
       case find(run, view) do
-        nil ->
-          {:ok, :gone}
-
-        {pane, _agent} ->
-          case Actions.call(:agent_spawn, "pane.close", %{pane_id: pane["pane_id"]},
-                 caller: "ui",
-                 server: socket()
-               ) do
-            {:ok, %{dry_run: true}} -> {:ok, :dry_run}
-            {:ok, _} -> {:ok, :closed}
-            {:error, _} -> {:error, "Herdr could not close the pane"}
-          end
+        nil -> {:ok, :gone}
+        {pane, _agent} -> close_pane(pane["pane_id"])
       end
     end
   end
+
+  defp close_pane(pane_id) do
+    case Actions.call(:agent_spawn, "pane.close", %{pane_id: pane_id},
+           caller: "ui",
+           server: socket()
+         ) do
+      {:ok, %{dry_run: true}} -> {:ok, :dry_run}
+      {:ok, _} -> {:ok, :closed}
+      {:error, _} -> {:error, "Herdr could not close the pane"}
+    end
+  end
+
+  @doc "Brings the run's agent to the front in Herdr (live mode only)."
+  def focus(%Run{pane_id: pane_id} = run) when is_binary(pane_id) do
+    with {:ok, view} <- fresh(current_view()),
+         {_pane, _agent} <- find(run, view) || {:error, "The run's pane is gone."} do
+      case Actions.call(:agent_spawn, "agent.focus", %{target: pane_id},
+             caller: "ui",
+             server: socket()
+           ) do
+        {:ok, %{dry_run: true}} -> {:ok, :dry_run}
+        {:ok, _} -> {:ok, :focused}
+        {:error, _} -> {:error, "Herdr could not focus the pane."}
+      end
+    end
+  end
+
+  def focus(_run), do: {:error, "The run has no pane."}
 
   @doc "Sends a prompt to the run's agent through the prompt guard."
   def prompt(%Run{pane_id: pane_id} = run, text) when is_binary(pane_id) do

@@ -94,21 +94,25 @@ defmodule Jarvis2.Runs do
   @doc "Closes the run's pane (when it is still ours) and marks the run stopped."
   def stop_run(%Run{} = run) do
     if Run.active?(run) or run.status == :dry_run do
-      case Launcher.close(run) do
-        {:ok, how} ->
-          run
-          |> progress(%{status: :stopped, finished_at: now()})
-          |> record("run.stop", %{pane: how}, if(how == :dry_run, do: :dry_run, else: :ok))
-          |> then(&{:ok, &1})
-
-        {:error, message} ->
-          record(run, "run.stop", %{error: message}, :error)
-          {:error, message}
-      end
+      run |> Launcher.close() |> finish_stop(run)
     else
       {:error, "The run is not active."}
     end
   end
+
+  defp finish_stop({:ok, how}, run) do
+    run
+    |> progress(%{status: :stopped, finished_at: now()})
+    |> record("run.stop", %{pane: how}, if(how == :dry_run, do: :dry_run, else: :ok))
+    |> then(&{:ok, &1})
+  end
+
+  defp finish_stop({:error, message}, run) do
+    record(run, "run.stop", %{error: message}, :error)
+    {:error, message}
+  end
+
+  def focus_run(%Run{} = run), do: Launcher.focus(run)
 
   def prompt_run(%Run{} = run, text) when is_binary(text) do
     text = String.trim(text)

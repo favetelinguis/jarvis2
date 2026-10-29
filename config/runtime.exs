@@ -27,6 +27,8 @@ else
       _ -> raise "JARVIS2_PORT must be an integer between 1 and 65535"
     end
 
+  config :logger, level: :info
+
   state_dir = System.get_env("JARVIS2_STATE_DIR") || Path.expand("~/.local/state/jarvis2")
 
   known_scenarios =
