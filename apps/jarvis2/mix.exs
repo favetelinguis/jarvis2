@@ -27,6 +27,8 @@ defmodule Jarvis2.MixProject do
     [
       {:herdr_client, in_umbrella: true},
       {:phoenix_pubsub, "~> 2.1"},
+      {:ecto_sql, "~> 3.13"},
+      {:ecto_sqlite3, "~> 0.26"},
       {:plug, "~> 1.16"},
       {:bandit, "~> 1.6"},
       {:jason, "~> 1.4"},
