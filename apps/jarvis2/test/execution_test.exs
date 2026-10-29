@@ -85,7 +85,7 @@ defmodule Jarvis2.ExecutionTest do
     start_supervised!({Finch, name: Jarvis2.ExecutionTestFinch})
     server = start_supervised!({Bandit, plug: Jarvis2Web.Endpoint, ip: {127, 0, 0, 1}, port: 0})
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
-    %{port: port, token: Jarvis2.Token.get(), fixture: fixture, mirror: mirror, view: view}
+    %{port: port, fixture: fixture, mirror: mirror, view: view}
   end
 
   test "discovers guarded tools and simulates them without sending mutations", ctx do
@@ -175,10 +175,7 @@ defmodule Jarvis2.ExecutionTest do
     parent = self()
     url = "http://127.0.0.1:#{ctx.port}/mcp"
 
-    stream_headers = [
-      {"authorization", "Bearer " <> ctx.token},
-      {"accept", "text/event-stream"} | h
-    ]
+    stream_headers = [{"accept", "text/event-stream"} | h]
 
     stream =
       Task.async(fn ->
@@ -525,7 +522,6 @@ defmodule Jarvis2.ExecutionTest do
 
   defp rpc(ctx, headers, body) do
     headers = [
-      {"authorization", "Bearer " <> ctx.token},
       {"content-type", "application/json"},
       {"accept", "application/json, text/event-stream"} | headers
     ]

@@ -24,8 +24,8 @@ defmodule Jarvis2.WebTest do
     refute log =~ "private-value"
   end
 
-  test "removed endpoints return not found", %{port: port, token: token} do
-    headers = [{"authorization", "Bearer " <> token}]
+  test "removed endpoints return not found", %{port: port} do
+    headers = []
     assert {404, _} = request(port, :post, "/hook/action/x", "{}", headers)
     assert {404, _} = request(port, :get, "/picker/x", "", headers)
     assert {404, _} = request(port, :post, "/picker/x", "{}", headers)
@@ -33,20 +33,13 @@ defmodule Jarvis2.WebTest do
     assert {406, _} = request(port, :post, "/mcp", "{}", headers)
   end
 
-  test "protected routes reject missing, wrong and duplicate credentials", %{
-    port: port,
-    token: token
+  test "MCP needs no credentials but rejects browser origins and non-loopback hosts", %{
+    port: port
   } do
-    for path <- ["/mcp"] do
-      assert {401, _} = request(port, :post, path, "{}")
-      assert {401, _} = request(port, :post, path, "{}", [{"authorization", "Bearer wrong"}])
-
-      assert {401, _} =
-               request(port, :post, path, "{}", [
-                 {"authorization", "Bearer " <> token},
-                 {"authorization", "Bearer " <> token}
-               ])
-    end
+    assert {406, _} = request(port, :post, "/mcp", "{}")
+    assert {403, _} = request(port, :post, "/mcp", "{}", [{"origin", "https://example.com"}])
+    conn = Plug.Test.conn(:post, "http://example.com/mcp", "{}")
+    assert %{status: 403} = Jarvis2Web.Endpoint.call(conn, Jarvis2Web.Endpoint.init([]))
   end
 
   test "status script reads the live HTTP endpoint", %{port: port} do

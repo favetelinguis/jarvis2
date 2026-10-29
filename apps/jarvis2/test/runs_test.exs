@@ -95,6 +95,9 @@ defmodule Jarvis2.RunsTest do
       assert [%{"method" => "pane.split"}, %{"method" => "agent.start"} = start, _prompt] =
                event.payload["planned"]
 
+      [split | _] = event.payload["planned"]
+      assert split["params"]["env_keys"] == ["JARVIS2_MCP_URL", "JARVIS2_RUN_ID"]
+
       assert start["params"]["args"] ==
                ~w(--provider openrouter --model openai/gpt-6-luna --thinking low)
 
@@ -107,8 +110,6 @@ defmodule Jarvis2.RunsTest do
       {:ok, run} = Runs.create_run(%{name: "demo", task: "write the report", cwd: ctx.cwd})
       Phoenix.PubSub.subscribe(Jarvis2.PubSub, Runs.topic())
 
-      run_id = run.id
-
       assert %Run{status: :working, pane_id: "w1:p9", terminal_id: "term-run"} =
                launched = Runs.launch(run)
 
@@ -119,7 +120,7 @@ defmodule Jarvis2.RunsTest do
       assert split["target_pane_id"] == "w1:p1"
       assert split["cwd"] == ctx.cwd
       assert split["env"]["JARVIS2_RUN_ID"] == run.id
-      assert {:ok, run_id} == Jarvis2.Tokens.resolve(split["env"]["JARVIS2_RUN_TOKEN"])
+      assert Enum.sort(Map.keys(split["env"])) == ["JARVIS2_MCP_URL", "JARVIS2_RUN_ID"]
       assert split["env"]["JARVIS2_MCP_URL"] =~ ~r{^http://127\.0\.0\.1:\d+/mcp$}
       assert split["focus"] == false
 

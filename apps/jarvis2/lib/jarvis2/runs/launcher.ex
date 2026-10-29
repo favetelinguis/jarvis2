@@ -6,7 +6,7 @@ defmodule Jarvis2.Runs.Launcher do
   """
   require Logger
 
-  alias Jarvis2.{Fleet, Tokens}
+  alias Jarvis2.Fleet
   alias Jarvis2.Herdr.{Actions, ExecutionGuard, Mirror, Socket}
   alias Jarvis2.Runs.Run
 
@@ -39,7 +39,7 @@ defmodule Jarvis2.Runs.Launcher do
           target_pane_id: anchor_pane_id,
           direction: "right",
           cwd: run.cwd,
-          env_keys: Enum.sort(["JARVIS2_RUN_TOKEN" | Map.keys(env(run))])
+          env_keys: Enum.sort(Map.keys(env(run)))
         }
       },
       %{
@@ -167,8 +167,7 @@ defmodule Jarvis2.Runs.Launcher do
   defp execute(run, :live) do
     with {:ok, view} <- fresh(current_view()),
          {:ok, anchor} <- anchor(view),
-         {:ok, token} <- Tokens.mint_for_run(run.id),
-         {:ok, pane} <- split(run, anchor, token),
+         {:ok, pane} <- split(run, anchor),
          :ok <- shell_ready(pane),
          {:ok, _agent} <- start_agent(run, pane) do
       {:ok,
@@ -182,13 +181,13 @@ defmodule Jarvis2.Runs.Launcher do
     end
   end
 
-  defp split(run, anchor, token) do
+  defp split(run, anchor) do
     params = %{
       target_pane_id: anchor["pane_id"],
       direction: "right",
       cwd: run.cwd,
       focus: false,
-      env: Map.put(env(run), "JARVIS2_RUN_TOKEN", token)
+      env: env(run)
     }
 
     result = Socket.request("pane.split", params, server: socket(), timeout: 5_000)

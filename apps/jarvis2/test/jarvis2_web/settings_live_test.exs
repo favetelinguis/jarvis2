@@ -1,7 +1,7 @@
 defmodule Jarvis2Web.SettingsLiveTest do
   use Jarvis2Web.ConnCase, async: false
 
-  alias Jarvis2.{Runs, Settings, Tokens}
+  alias Jarvis2.Settings
 
   setup %{conn: conn} do
     for key <- [:live_scenarios, :allowed_scenarios, :live] do
@@ -80,20 +80,5 @@ defmodule Jarvis2Web.SettingsLiveTest do
     {:ok, view, _} = live(conn, "/settings")
     assert has_element?(view, ~s(input[value="agent_spawn"][disabled]))
     refute has_element?(view, ~s(input[value="attention"][disabled]))
-  end
-
-  test "lists active run tokens and revokes them", %{conn: conn} do
-    {:ok, run} = Runs.create_run(%{name: "tokened", task: "t", cwd: File.cwd!()})
-    {:ok, plain} = Tokens.mint_for_run(run.id)
-    [token] = Tokens.list_active()
-
-    {:ok, view, html} = live(conn, "/settings")
-    assert html =~ "tokened"
-    refute html =~ plain
-
-    view |> element("#token-#{token.id} button", "Revoke") |> render_click()
-    refute has_element?(view, "#token-#{token.id}")
-    assert Tokens.resolve(plain) == :error
-    assert render(view) =~ "No active run tokens."
   end
 end

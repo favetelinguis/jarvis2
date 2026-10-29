@@ -1,7 +1,7 @@
 defmodule Jarvis2.MCPRunTest do
   use Jarvis2.DataCase, async: false
 
-  alias Jarvis2.{Journal, Questions, Runs, Tokens}
+  alias Jarvis2.{Journal, Questions, Runs}
   alias Jarvis2.Runs.Run
 
   defmodule Mirror do
@@ -9,6 +9,7 @@ defmodule Jarvis2.MCPRunTest do
     def start_link(view), do: GenServer.start_link(__MODULE__, view)
     def init(view), do: {:ok, view}
     def handle_call(:get, _from, view), do: {:reply, view, view}
+    def handle_call({:put, view}, _from, _), do: {:reply, :ok, view}
   end
 
   setup do
@@ -35,24 +36,29 @@ defmodule Jarvis2.MCPRunTest do
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
 
     run = working_run("first", "term-run")
-    {:ok, token} = Tokens.mint_for_run(run.id)
-    %{port: port, run: run, token: token}
+    %{port: port, run: run, pane: "w1:p9", mirror: mirror}
   end
 
-  test "a run token resolves to the run's pane without any identity headers", ctx do
-    session = start_session(ctx, ctx.token)
+  test "a pane header resolves to its run", ctx do
+    session = start_session(ctx, ctx.pane)
     me = call(ctx, session, "whoami", %{})
 
     assert me["run_id"] == ctx.run.id
     assert me["pane"] == "w1:p9"
     assert me["workspace"] == "w1"
     assert me["agent_name"] == "run-agent"
-    assert me["mismatch"] == false
+  end
+
+  test "run lookup needs only the pane header", ctx do
+    session = start_session(ctx, {ctx.pane, nil})
+    assert %{"run_id" => id, "pane" => "unknown"} = call(ctx, session, "whoami", %{})
+    assert id == ctx.run.id
+    assert %{"ticket" => _} = call(ctx, session, "ask_human", %{prompt: "pane only"})
   end
 
   test "ask_human returns a ticket and a human answer unblocks wait_for_answer", ctx do
     Phoenix.PubSub.subscribe(Jarvis2.PubSub, Questions.topic())
-    session = start_session(ctx, ctx.token)
+    session = start_session(ctx, ctx.pane)
 
     ticket = call(ctx, session, "ask_human", %{prompt: "Which file?", options: ["a.ex", "b.ex"]})
     assert %{"status" => "pending", "ticket" => id} = ticket
@@ -71,7 +77,7 @@ defmodule Jarvis2.MCPRunTest do
   end
 
   test "request_approval is an approve/deny question", ctx do
-    session = start_session(ctx, ctx.token)
+    session = start_session(ctx, ctx.pane)
 
     %{"ticket" => id} =
       call(ctx, session, "request_approval", %{action: "delete build/", detail: "frees 2GB"})
@@ -88,12 +94,11 @@ defmodule Jarvis2.MCPRunTest do
   end
 
   test "agents cannot read another run's tickets or flood the inbox", ctx do
-    session = start_session(ctx, ctx.token)
+    session = start_session(ctx, ctx.pane)
     %{"ticket" => id} = call(ctx, session, "ask_human", %{prompt: "mine"})
 
-    other = working_run("second", "term-other")
-    {:ok, other_token} = Tokens.mint_for_run(other.id)
-    other_session = start_session(ctx, other_token)
+    working_run("second", "term-other")
+    other_session = start_session(ctx, "w1:p8")
 
     assert {:error, "unknown ticket"} =
              call_error(ctx, other_session, "wait_for_answer", %{ticket: id, timeout_s: 1})
@@ -104,8 +109,8 @@ defmodule Jarvis2.MCPRunTest do
              call_error(ctx, session, "ask_human", %{prompt: "one too many"})
   end
 
-  test "run-only tools are refused for callers without a run token", ctx do
-    session = start_session(ctx, Jarvis2.Token.get())
+  test "run-only tools are refused for an unknown pane", ctx do
+    session = start_session(ctx, "w1:unknown")
 
     for {tool, args} <- [
           {"ask_human", %{prompt: "x"}},
@@ -113,12 +118,12 @@ defmodule Jarvis2.MCPRunTest do
           {"wait_for_answer", %{ticket: "x"}},
           {"submit_result", %{summary: "x"}}
         ] do
-      assert {:error, "this tool requires a run token"} = call_error(ctx, session, tool, args)
+      assert {:error, "no run for this pane"} = call_error(ctx, session, tool, args)
     end
   end
 
   test "report_status updates the run and keeps the summary for the user", ctx do
-    session = start_session(ctx, ctx.token)
+    session = start_session(ctx, ctx.pane)
 
     assert %{"run_status" => "blocked"} =
              call(ctx, session, "report_status", %{state: "blocked", summary: "need a decision"})
@@ -135,8 +140,8 @@ defmodule Jarvis2.MCPRunTest do
              })
   end
 
-  test "submit_result finishes the run, cancels open questions and revokes the token", ctx do
-    session = start_session(ctx, ctx.token)
+  test "submit_result keeps the pane usable until the run is stopped", ctx do
+    session = start_session(ctx, ctx.pane)
     %{"ticket" => id} = call(ctx, session, "ask_human", %{prompt: "still open"})
 
     assert %{"status" => "done"} =
@@ -151,36 +156,46 @@ defmodule Jarvis2.MCPRunTest do
            } = run
 
     assert %{status: :cancelled} = Questions.get(id)
-    assert Tokens.resolve(ctx.token) == :error
-    assert {401, _} = raw_post(ctx, ctx.token)
+    assert %{"ticket" => _} = call(ctx, session, "ask_human", %{prompt: "follow up"})
+    assert {:ok, %{status: :stopped}} = Runs.stop_run(run)
+
+    assert {:error, "no run for this pane"} =
+             call_error(ctx, session, "ask_human", %{prompt: "too late"})
   end
 
-  test "stopping or losing a run revokes its token", ctx do
-    Runs.stop_run(Runs.get_run(ctx.run.id)) |> then(&assert({:ok, %{status: :stopped}} = &1))
-    assert Tokens.resolve(ctx.token) == :error
-  end
+  test "stale mirror allows run lookup, but a recycled terminal does not", ctx do
+    session = start_session(ctx, ctx.pane)
+    :ok = GenServer.call(ctx.mirror, {:put, %{view() | stale: true}})
+    assert %{"run_id" => id, "pane" => "unknown"} = call(ctx, session, "whoami", %{})
+    assert id == ctx.run.id
+    assert %{"ticket" => _} = call(ctx, session, "ask_human", %{prompt: "stale"})
 
-  test "unknown run tokens are rejected before any tool runs", ctx do
-    assert {401, _} = raw_post(ctx, "j2r_garbage")
-    assert {401, _} = raw_post(ctx, "wrong")
-    assert {401, _} = raw_post(ctx, nil)
-  end
+    recycled =
+      update_in(view(), [:snapshot, "panes"], fn panes ->
+        Enum.map(panes, fn pane ->
+          if pane["pane_id"] == "w1:p9", do: Map.put(pane, "terminal_id", "new"), else: pane
+        end)
+      end)
 
-  test "a pane header that disagrees with the run is refused for write tools only", ctx do
-    session =
-      start_session(ctx, ctx.token, [{"x-herdr-pane", "w1:p1"}, {"x-herdr-workspace", "w1"}])
+    :ok = GenServer.call(ctx.mirror, {:put, recycled})
 
-    assert call(ctx, session, "whoami", %{})["mismatch"] == true
-
-    assert {:error, "caller identity does not match" <> _} =
+    assert {:error, "no run for this pane"} =
              call_error(ctx, session, "ask_human", %{prompt: "x"})
+  end
 
-    assert {:error, _} = call_error(ctx, session, "blackboard_put", %{key: "k", value: 1})
-    assert Questions.list_pending() == []
+  test "failed and lost runs no longer resolve", ctx do
+    session = start_session(ctx, ctx.pane)
+
+    for status <- [:failed, :lost] do
+      ctx.run |> Run.progress_changeset(%{status: status}) |> Repo.update!()
+
+      assert {:error, "no run for this pane"} =
+               call_error(ctx, session, "ask_human", %{prompt: "x"})
+    end
   end
 
   test "tool calls are journalled against the run", ctx do
-    session = start_session(ctx, ctx.token)
+    session = start_session(ctx, ctx.pane)
     call(ctx, session, "ask_human", %{prompt: "journal me"})
 
     assert Enum.any?(
@@ -189,19 +204,6 @@ defmodule Jarvis2.MCPRunTest do
            )
 
     refute inspect(Journal.recent()) =~ "journal me"
-  end
-
-  test "a dry-run start never mints a token" do
-    config(:live, false)
-    config(:live_scenarios, [])
-    Repo.delete_all(Jarvis2.Tokens.ApiToken)
-    {:ok, run} = Runs.create_run(%{name: "dry", task: "t", cwd: File.cwd!()})
-    Runs.launch(run)
-    assert Repo.aggregate(Jarvis2.Tokens.ApiToken, :count) == 0
-
-    event = Enum.find(Journal.recent(run_id: run.id), &(&1.type == "run.start"))
-    [split | _] = event.payload["planned"]
-    assert "JARVIS2_RUN_TOKEN" in split["params"]["env_keys"]
   end
 
   # --- helpers
@@ -278,9 +280,9 @@ defmodule Jarvis2.MCPRunTest do
     }
   end
 
-  defp start_session(ctx, token, extra \\ []) do
+  defp start_session(ctx, pane) do
     {200, headers, %{"result" => %{"protocolVersion" => protocol}}} =
-      rpc(ctx, token, [], %{
+      rpc(ctx, pane, [], %{
         jsonrpc: "2.0",
         id: 1,
         method: "initialize",
@@ -295,12 +297,12 @@ defmodule Jarvis2.MCPRunTest do
       Enum.find_value(headers, fn {k, v} -> if String.downcase(k) == "mcp-session-id", do: v end)
 
     session = %{
-      token: token,
-      headers: [{"mcp-session-id", id}, {"mcp-protocol-version", protocol} | extra]
+      pane: pane,
+      headers: [{"mcp-session-id", id}, {"mcp-protocol-version", protocol}]
     }
 
     {202, _, _} =
-      rpc(ctx, token, session.headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
+      rpc(ctx, pane, session.headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
 
     session
   end
@@ -321,7 +323,7 @@ defmodule Jarvis2.MCPRunTest do
 
   defp tool(ctx, session, name, args) do
     {200, _, %{"result" => %{"content" => [%{"text" => text}], "isError" => error?}}} =
-      rpc(ctx, session.token, session.headers, %{
+      rpc(ctx, session.pane, session.headers, %{
         jsonrpc: "2.0",
         id: System.unique_integer([:positive]),
         method: "tools/call",
@@ -331,16 +333,15 @@ defmodule Jarvis2.MCPRunTest do
     if error?, do: {:error, text}, else: {:ok, text}
   end
 
-  defp raw_post(ctx, token) do
-    {status, _, body} = rpc(ctx, token, [], %{jsonrpc: "2.0", id: 1, method: "initialize"})
-    {status, body}
-  end
-
-  defp rpc(ctx, token, headers, request) do
-    auth = if token, do: [{"authorization", "Bearer " <> token}], else: []
+  defp rpc(ctx, pane, headers, request) do
+    identity =
+      case pane do
+        {id, nil} -> [{"x-herdr-pane", id}]
+        id -> [{"x-herdr-pane", id}, {"x-herdr-workspace", "w1"}]
+      end
 
     headers =
-      auth ++
+      identity ++
         [
           {"content-type", "application/json"},
           {"accept", "application/json, text/event-stream"} | headers

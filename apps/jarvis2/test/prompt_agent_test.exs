@@ -75,7 +75,7 @@ defmodule Jarvis2.PromptAgentTest do
       start_supervised({Bandit, plug: Jarvis2Web.Endpoint, ip: {127, 0, 0, 1}, port: 0})
 
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
-    %{port: port, token: Jarvis2.Token.get(), mirror: mirror, view: view, behavior: behavior}
+    %{port: port, mirror: mirror, view: view, behavior: behavior}
   end
 
   test "dry-run is scoped, refuses self and unsafe targets, and sends no input", ctx do
@@ -331,7 +331,6 @@ defmodule Jarvis2.PromptAgentTest do
 
   defp rpc(ctx, headers, body) do
     headers = [
-      {"authorization", "Bearer " <> ctx.token},
       {"content-type", "application/json"},
       {"accept", "application/json, text/event-stream"} | headers
     ]

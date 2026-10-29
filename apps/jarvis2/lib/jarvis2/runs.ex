@@ -6,7 +6,7 @@ defmodule Jarvis2.Runs do
   """
   import Ecto.Query
 
-  alias Jarvis2.{Journal, Questions, Repo, Tokens}
+  alias Jarvis2.{Journal, Questions, Repo}
   alias Jarvis2.MCP.MixRunner
   alias Jarvis2.Runs.{Launcher, Run}
 
@@ -46,6 +46,19 @@ defmodule Jarvis2.Runs do
 
   def active_runs,
     do: Repo.all(from(r in Run, where: r.status in [:starting, :working, :blocked, :done]))
+
+  @doc "Find the most recent active run for a pane."
+  def get_active_by_pane(pane) when is_binary(pane) and pane != "" do
+    Repo.one(
+      from(r in Run,
+        where: r.pane_id == ^pane and r.status in [:starting, :working, :blocked, :done],
+        order_by: [desc: r.inserted_at, desc: r.id],
+        limit: 1
+      )
+    )
+  end
+
+  def get_active_by_pane(_), do: nil
 
   @doc "Creates the run row only; nothing is sent to Herdr."
   def create_run(attrs) do
@@ -198,7 +211,7 @@ defmodule Jarvis2.Runs do
   def report_status(_run_id, _state, _summary),
     do: {:error, "state must be working, blocked or done"}
 
-  @doc "An agent's final result (via MCP): finishes the run and closes its credentials."
+  @doc "An agent's final result (via MCP): finishes the run and cancels open questions."
   def submit_result(run_id, summary, artifacts) do
     with %Run{} = run <- get_run(run_id), true <- Run.active?(run) do
       updated =
@@ -208,7 +221,6 @@ defmodule Jarvis2.Runs do
           result: %{summary: summary, artifacts: artifacts}
         })
 
-      Tokens.revoke_for_run(run.id)
       Questions.cancel_for_run(run.id)
       record(updated, "run.result", %{artifacts: length(artifacts)})
       {:ok, updated}
@@ -302,11 +314,7 @@ defmodule Jarvis2.Runs do
 
     {:ok, run} = run |> Run.progress_changeset(attrs) |> Repo.update()
 
-    # A run that can no longer act must not keep credentials or open questions.
-    if run.status in [:failed, :lost, :stopped] do
-      Tokens.revoke_for_run(run.id)
-      Questions.cancel_for_run(run.id)
-    end
+    if run.status in [:failed, :lost, :stopped], do: Questions.cancel_for_run(run.id)
 
     broadcast(run)
     run

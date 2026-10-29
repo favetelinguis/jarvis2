@@ -22,11 +22,11 @@ Open it in your browser. The code is printed to stdout rather than logged. If it
 paste the long-lived token from `$JARVIS2_STATE_DIR/token` (default `~/.local/state/jarvis2/token`) on
 the login page. Run it inside a Herdr pane (or keep a pane focused) so new runs have somewhere to split from.
 
-| Variable | Meaning |
-|---|---|
-| `JARVIS2_PORT` | HTTP port on `127.0.0.1` (default `4747`) |
-| `JARVIS2_STATE_DIR` | token, cookie secret and `jarvis2.db` (default `~/.local/state/jarvis2`) |
-| `JARVIS2_LIVE=1` | allow real Herdr changes; without it every action is a recorded dry-run |
+| Variable            | Meaning                                                                    |
+| ------------------- | -------------------------------------------------------------------------- |
+| `JARVIS2_PORT`      | HTTP port on `127.0.0.1` (default `4747`)                                  |
+| `JARVIS2_STATE_DIR` | token, cookie secret and `jarvis2.db` (default `~/.local/state/jarvis2`)   |
+| `JARVIS2_LIVE=1`    | allow real Herdr changes; without it every action is a recorded dry-run    |
 | `JARVIS2_SCENARIOS` | optional comma-separated lock-down of the actions that may ever be enabled |
 
 A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bin/jarvis2 start`.
@@ -36,10 +36,10 @@ A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bi
 1. Start with `JARVIS2_LIVE=1 mix run --no-halt` and sign in.
 2. **Settings**: enable `agent_spawn` and `agent_prompt` (live actions are off until you do).
 3. **New run**: the form is prefilled with agent `pi`, model `openrouter/openai/gpt-6-luna`, thinking `low`.
-   Give it a task, for example *Ask me which file to change, then ask for approval before editing*.
+   Give it a task, for example _Ask me which file to change, then ask for approval before editing_.
 4. Jarvis2 splits a pane next to the anchor pane, starts Pi there with
    `--provider openrouter --model openai/gpt-6-luna --thinking low`, and delivers the task. The run page
-   shows status, the terminal tail and a live timeline. The agent's questions appear as cards on the run
+   shows status and a live timeline. The agent's questions appear as cards on the run
    page and in the **Inbox**; answering unblocks it. `submit_result` finishes the run.
 
 Without `JARVIS2_LIVE=1` the same flow is a dry-run: the run is recorded and the planned Herdr calls are
@@ -47,40 +47,40 @@ shown in its timeline, but nothing is started. `MODEL=luna scripts/live-tour.sh`
 session for a manual showcase (it uses your real Pi configuration and OpenRouter credits).
 
 For an agent to call Jarvis2's tools, Pi needs the `jarvis2` MCP server. The repository's `.pi/mcp.json`
-(used after Pi project trust) sends `Bearer ${JARVIS2_RUN_TOKEN:-<file token>}`: runs get their own token
-in the pane environment. For runs started in other directories, add the same `jarvis2` entry to
+(used after Pi project trust) sends `X-Herdr-Pane` and `X-Herdr-Workspace` from the pane environment.
+For runs started in other directories, add the same `jarvis2` entry, including those headers, to
 `~/.pi/agent/mcp.json`.
 
 ## Screens
 
-| Route | Purpose |
-|---|---|
-| `/` | Dashboard: connection, live/dry badge, workspace → tab → pane tree, agents, worktrees, layout diff, recent events, *Apply dev layout* |
-| `/runs`, `/runs/new`, `/runs/:id` | Runs with status filter; start form; run page with questions, prompt box, terminal tail, timeline, stop; Mix jobs |
-| `/inbox` | Every pending question and approval, with a count badge in the navigation |
-| `/blackboard` | Notes shared between agents and you (JSON values) |
-| `/events` | The journal, filterable by source, type prefix and run |
-| `/settings` | Which actions are enabled, defaults for new runs, run-token management |
+| Route                             | Purpose                                                                                                                               |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                               | Dashboard: connection, live/dry badge, workspace → tab → pane tree, agents, worktrees, layout diff, recent events, _Apply dev layout_ |
+| `/runs`, `/runs/new`, `/runs/:id` | Runs with status filter; start form; run page with questions, prompt box, timeline, stop; Mix jobs                     |
+| `/inbox`                          | Every pending question and approval, with a count badge in the navigation                                                             |
+| `/blackboard`                     | Notes shared between agents and you (JSON values)                                                                                     |
+| `/events`                         | The journal, filterable by source, type prefix and run                                                                                |
+| `/settings`                       | Which actions are enabled and defaults for new runs                                                                |
 
 Every page except `/login`, `/healthz`, `/status` and `/mcp` needs a session.
 
 ## MCP tools
 
-The MCP endpoint (`/mcp`, streamable HTTP) accepts the file token or a per-run token. Every tool has a
-UI surface or is agent-only:
+The MCP endpoint (`/mcp`, streamable HTTP) is unauthenticated. Run-only tools resolve the active run
+from the pane header. Every tool has a UI surface or is agent-only:
 
-| Tool | Where you see it |
-|---|---|
-| `whoami`, `log`, `wait_for_event`, `notify_human` | agent-only (calls appear in `/events`) |
-| `blackboard_put/get/list` | `/blackboard` |
-| `list_agents`, `get_layout`, `list_worktrees` | `/` |
-| `report_status` | run status and timeline; sidebar token when `sidebar_tokens` is enabled |
-| `read_agent` | run terminal tail |
-| `prompt_agent`, `spawn_agent`, `run_command` | `fleet.*` rows in `/events` |
-| `apply_layout` | *Apply dev layout* on `/` |
-| `run_mix` | a run of kind `mix` on `/runs` |
-| `ask_human`, `request_approval`, `wait_for_answer` | run page and `/inbox` (run tokens only) |
-| `submit_result` | run page *Result* (run tokens only) |
+| Tool                                               | Where you see it                                                        |
+| -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `whoami`, `log`, `wait_for_event`, `notify_human`  | agent-only (calls appear in `/events`)                                  |
+| `blackboard_put/get/list`                          | `/blackboard`                                                           |
+| `list_agents`, `get_layout`, `list_worktrees`      | `/`                                                                     |
+| `report_status`                                    | run status and timeline; sidebar token when `sidebar_tokens` is enabled |
+| `read_agent`                                       | agent-only                                                              |
+| `prompt_agent`, `spawn_agent`, `run_command`       | `fleet.*` rows in `/events`                                             |
+| `apply_layout`                                     | _Apply dev layout_ on `/`                                               |
+| `run_mix`                                          | a run of kind `mix` on `/runs`                                          |
+| `ask_human`, `request_approval`, `wait_for_answer` | run page and `/inbox` (run pane only)                                 |
+| `submit_result`                                    | run page _Result_ (run pane only)                                     |
 
 Resources: `jarvis2://session`, `layout` and `worktrees` (dashboard), `events/recent` and `journal`
 (`/events`), `blackboard` (`/blackboard`). `jarvis2://layout` includes the net layout diff (membership,
@@ -88,21 +88,21 @@ focus, geometry, split ratios, agent state; limited to 64 changes, `resynced` af
 `unavailable` when invalid or oversized). Browser-origin requests to `/mcp` are rejected.
 
 `ask_human` and `request_approval` return a ticket immediately; the agent polls `wait_for_answer(ticket,
-timeout_s ≤ 100)` until it is no longer `pending`. Questions expire after an hour and are cancelled when
-the run ends; a run may have five open at a time.
+timeout_s ≤ 100)` until it is no longer `pending`. Questions expire after an hour and are cancelled on
+result submission or when the run stops, fails or is lost; a run may have five open at a time.
 
 ## Safety model
 
-- **Dry-run by default.** Real Herdr changes need `JARVIS2_LIVE=1` *and* the action enabled in Settings
+- **Dry-run by default.** Real Herdr changes need `JARVIS2_LIVE=1` _and_ the action enabled in Settings
   (`JARVIS2_SCENARIOS` can restrict what may be enabled). The environment is the ceiling; the database can
   only narrow it.
 - **Loopback only.** Bound to `127.0.0.1`; requests with a non-loopback `Host` are refused (DNS rebinding);
   the LiveView socket checks origin; `/mcp` refuses browser origins. Sign-in uses single-use codes and a
   signed session cookie.
-- **Real MCP identity.** A run token resolves to its run, and the run's recorded pane/terminal gives its Herdr
-  identity. Tokens are SHA-256 hashed at rest, expire after 24 h, and are revoked when the run stops, fails,
-  is lost or submits its result. The `X-Herdr-*` headers are only a cross-check: a mismatch refuses write tools.
-  The long-lived file token still works for agents that are not runs but cannot use the run-only tools.
+- **MCP identity is unauthenticated.** `X-Herdr-Pane` selects an active run, including one that has
+  submitted a result. Any local process can claim another pane and call MCP tools or answer for its run.
+  A fresh mirror checks the recorded terminal against the pane. Loopback binding, Host and Origin checks,
+  dry-run gates, execution/prompt guards and rate limits remain in place.
 - **Same guards for UI and MCP.** UI actions act as the system caller `ui` through the execution and prompt
   guards and are audited as `fleet.*` events; they skip only the "caller must be a detected agent" check.
 - **Redaction.** Prompt, command and summary text, blackboard values and matched output lines are never stored in
@@ -131,7 +131,7 @@ Enabled from Settings, each records `automation.*` rows in the journal:
 - `sidebar_tokens` / `pane_hygiene`: `$jarvis`, `$agent_state` and `$last_tool` sidebar tokens (60 s TTL) and
   pane/tab renaming, which can overwrite manual labels; see `examples/herdr-config.snippet.toml`.
 - `custom_worker`: shows a running `run_mix` job as a `jarvis2-mix` agent on the server's own pane.
-- `declarative_layout`: the *dev* layout, a **new** tab with three labelled shells.
+- `declarative_layout`: the _dev_ layout, a **new** tab with three labelled shells.
 
 ## Development
 

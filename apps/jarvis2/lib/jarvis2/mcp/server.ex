@@ -57,9 +57,6 @@ defmodule Jarvis2.MCP.Server do
     {"submit_result", "Finish your run with a summary and optional artifact paths or URLs.",
      %{summary: {:required, :string}, artifacts: {:list, :string}}}
   ]
-  # Tools that change something; refused when the caller's identity does not match its run.
-  @write_tools ~w(report_status notify_human blackboard_put prompt_agent spawn_agent run_command apply_layout ask_human request_approval submit_result)
-
   @resources ~w(jarvis2://session jarvis2://layout jarvis2://worktrees jarvis2://events/recent jarvis2://journal jarvis2://blackboard)
 
   @impl true
@@ -180,9 +177,6 @@ defmodule Jarvis2.MCP.Server do
 
     {:reply, response, frame}
   end
-
-  defp call_tool(name, _args, %{mismatch: true}, _progress) when name in @write_tools,
-    do: {:error, "caller identity does not match the run's pane"}
 
   defp call_tool(name, args, caller, progress), do: Tools.call(name, args, caller, progress)
 

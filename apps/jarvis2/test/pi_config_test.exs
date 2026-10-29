@@ -9,7 +9,7 @@ defmodule Jarvis2.PiConfigTest do
 
     assert server["exposure"] == "codemode"
     assert server["headers"]["X-Herdr-Pane"] == ~S(${HERDR_PANE_ID})
-    assert server["headers"]["Authorization"] =~ "~/.local/state/jarvis2/token"
+    refute Map.has_key?(server["headers"], "Authorization")
     assert server["toolExposure"]["whoami"] == "direct"
     refute Map.has_key?(server["toolExposure"], "elixir_eval")
   end

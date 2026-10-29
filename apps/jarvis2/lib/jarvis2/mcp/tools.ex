@@ -125,7 +125,7 @@ defmodule Jarvis2.MCP.Tools do
 
   def call(name, _args, _caller)
       when name in ~w(ask_human request_approval wait_for_answer submit_result),
-      do: {:error, "this tool requires a run token"}
+      do: {:error, "no run for this pane"}
 
   def call("report_status", args, %{run_id: run_id} = caller) when is_binary(run_id) do
     state = value(args, :state)

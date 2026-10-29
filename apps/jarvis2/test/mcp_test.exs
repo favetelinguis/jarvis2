@@ -67,7 +67,7 @@ defmodule Jarvis2.MCPTest do
       start_supervised({Bandit, plug: Jarvis2Web.Endpoint, ip: {127, 0, 0, 1}, port: 0})
 
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
-    %{port: port, token: Jarvis2.Token.get(), mirror: mirror}
+    %{port: port, mirror: mirror}
   end
 
   test "streamable HTTP exposes tools, caller identity, blackboard and resources", ctx do
@@ -856,7 +856,6 @@ defmodule Jarvis2.MCPTest do
 
   defp rpc(ctx, headers, request) do
     headers = [
-      {"authorization", "Bearer " <> ctx.token},
       {"content-type", "application/json"},
       {"accept", "application/json, text/event-stream"} | headers
     ]

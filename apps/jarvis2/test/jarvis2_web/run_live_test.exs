@@ -4,6 +4,13 @@ defmodule Jarvis2Web.RunLiveTest do
   alias Jarvis2.Runs
   alias Jarvis2.Runs.Run
 
+  defmodule Mirror do
+    use GenServer
+    def start_link(view), do: GenServer.start_link(__MODULE__, view)
+    def init(view), do: {:ok, view}
+    def handle_call(:get, _from, view), do: {:reply, view, view}
+  end
+
   setup %{conn: conn} do
     previous =
       for key <- [:live, :live_scenarios],
@@ -187,6 +194,69 @@ defmodule Jarvis2Web.RunLiveTest do
       Runs.launch(run)
       assert has_element?(view, ".badge-dry_run")
       assert render(view) =~ "run.start"
+    end
+
+    test "opening and updating an active run does not read its pane", %{conn: conn} do
+      pane = %{
+        "pane_id" => "w1:p9",
+        "terminal_id" => "term-run",
+        "workspace_id" => "w1",
+        "tab_id" => "w1:t1"
+      }
+
+      mirror =
+        start_supervised!(
+          {Mirror,
+           %{
+             stale: false,
+             snapshot: %{"panes" => [pane], "agents" => [Map.put(pane, "agent", "pi")]}
+           }}
+        )
+
+      path =
+        Path.join(
+          Application.fetch_env!(:jarvis2, :state_dir),
+          "no-tail-#{System.unique_integer([:positive])}"
+        )
+
+      test_pid = self()
+
+      {:ok, _, listener} =
+        Jarvis2.Test.FakeHerdr.start_link(path, fn %{"method" => "pane.read"} ->
+          send(test_pid, :pane_read)
+          {:reply, %{result: %{type: "pane_read", read: %{pane_id: "w1:p9", text: "output"}}}}
+        end)
+
+      socket = start_supervised!({Jarvis2.Herdr.Socket, [name: nil, path: path]})
+      on_exit(fn -> :gen_tcp.close(listener) end)
+
+      for {key, value} <- [mirror: mirror, herdr_socket: socket] do
+        old = Application.fetch_env(:jarvis2, key)
+        Application.put_env(:jarvis2, key, value)
+
+        on_exit(fn ->
+          case old do
+            {:ok, v} -> Application.put_env(:jarvis2, key, v)
+            :error -> Application.delete_env(:jarvis2, key)
+          end
+        end)
+      end
+
+      {:ok, run} = Runs.create_run(%{name: "active", task: "t", cwd: File.cwd!()})
+
+      {:ok, run} =
+        run
+        |> Run.progress_changeset(%{status: :working, pane_id: "w1:p9", terminal_id: "term-run"})
+        |> Jarvis2.Repo.update()
+
+      {:ok, view, _} = live(conn, "/runs/#{run.id}")
+      assert has_element?(view, "#focus")
+      refute_receive :pane_read, 300
+
+      Phoenix.PubSub.broadcast(Jarvis2.PubSub, "run:" <> run.id, {:run, run})
+      assert has_element?(view, ".badge-working")
+      refute_receive :pane_read, 300
+      refute has_element?(view, "h2", "Terminal")
     end
 
     test "a dry-run can be stopped from the page", %{conn: conn} do

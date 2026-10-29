@@ -2,7 +2,7 @@ defmodule Jarvis2Web.RunLive.Show do
   use Jarvis2Web, :live_view
 
   alias Jarvis2.{Journal, Questions, Runs}
-  alias Jarvis2.Runs.{Run, Tail}
+  alias Jarvis2.Runs.Run
 
   @event_limit 200
 
@@ -15,7 +15,6 @@ defmodule Jarvis2Web.RunLive.Show do
       run ->
         if connected?(socket) do
           Phoenix.PubSub.subscribe(Jarvis2.PubSub, "run:" <> run.id)
-          Phoenix.PubSub.subscribe(Jarvis2.PubSub, Tail.topic(run.id))
         end
 
         events = Journal.recent(run_id: run.id, limit: @event_limit) |> Enum.reverse()
@@ -24,11 +23,9 @@ defmodule Jarvis2Web.RunLive.Show do
          socket
          |> assign(:run, run)
          |> assign(:live?, Runs.Launcher.mode() == :live)
-         |> assign(:tail, nil)
          |> assign(:questions, Questions.list_for_run(run.id))
          |> assign(:prompt_form, to_form(%{"text" => ""}, as: :prompt))
-         |> stream(:events, events)
-         |> watch_tail()}
+         |> stream(:events, events)}
     end
   end
 
@@ -66,23 +63,13 @@ defmodule Jarvis2Web.RunLive.Show do
 
   @impl true
   def handle_info({:run, run}, socket),
-    do: {:noreply, socket |> assign(:run, run) |> watch_tail()}
+    do: {:noreply, assign(socket, :run, run)}
 
   def handle_info({:event, event}, socket),
     do: {:noreply, stream_insert(socket, :events, event, at: 0, limit: @event_limit)}
 
-  def handle_info({:tail, text}, socket), do: {:noreply, assign(socket, :tail, text)}
-
   def handle_info({:question, _question}, socket),
     do: {:noreply, assign(socket, :questions, Questions.list_for_run(socket.assigns.run.id))}
-
-  defp watch_tail(socket) do
-    run = socket.assigns.run
-
-    if connected?(socket) and Run.active?(run) and run.pane_id,
-      do: assign(socket, :tail, Tail.watch(run.id) || socket.assigns.tail),
-      else: socket
-  end
 
   @impl true
   def render(assigns) do
@@ -144,11 +131,6 @@ defmodule Jarvis2Web.RunLive.Show do
         <textarea name="prompt[text]" rows="3" placeholder="Message to the agent"></textarea>
         <button type="submit">Send</button>
       </.form>
-    </section>
-
-    <section :if={@tail} id="tail-section">
-      <h2>Terminal</h2>
-      <pre id="tail" class="tail">{@tail}</pre>
     </section>
 
     <section id="timeline-section">

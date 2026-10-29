@@ -1,7 +1,7 @@
 defmodule Jarvis2Web.SettingsLive do
   use Jarvis2Web, :live_view
 
-  alias Jarvis2.{Runs, Settings, Tokens}
+  alias Jarvis2.Settings
   alias Jarvis2.Runs.Run
 
   @impl true
@@ -26,20 +26,13 @@ defmodule Jarvis2Web.SettingsLive do
     end
   end
 
-  def handle_event("revoke", %{"id" => id}, socket) do
-    Tokens.revoke(id)
-    {:noreply, load(socket)}
-  end
-
   # An unchecked list of checkboxes sends no key at all.
   defp normalize(params), do: Map.put_new(params, "scenarios", [])
 
   defp load(socket) do
     settings = Settings.get()
 
-    socket
-    |> assign_form(Settings.change(settings))
-    |> assign(:tokens, Enum.map(Tokens.list_active(), &{&1, Runs.get_run(&1.run_id)}))
+    assign_form(socket, Settings.change(settings))
   end
 
   defp assign_form(socket, changeset),
@@ -91,31 +84,7 @@ defmodule Jarvis2Web.SettingsLive do
       <button type="submit">Save</button>
     </.form>
 
-    <section id="tokens">
-      <h2>Access tokens</h2>
-      <p class="muted">
-        The API token for agents that are not runs is in <code>{@token_path}</code>. Run tokens are
-        created when a run starts and revoked when it ends; you can revoke one early here.
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Run</th><th>Expires</th><th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr :for={{token, run} <- @tokens} id={"token-#{token.id}"}>
-            <td>
-              <.link :if={run} navigate={"/runs/#{run.id}"}>{run.name}</.link>
-              <span :if={!run} class="muted">unknown run</span>
-            </td>
-            <td>{Calendar.strftime(token.expires_at, "%Y-%m-%d %H:%M")}</td>
-            <td><button phx-click="revoke" phx-value-id={token.id}>Revoke</button></td>
-          </tr>
-        </tbody>
-      </table>
-      <p :if={@tokens == []} class="muted">No active run tokens.</p>
-    </section>
+    <p class="muted">The UI sign-in token is stored in <code>{@token_path}</code>.</p>
     """
   end
 end
