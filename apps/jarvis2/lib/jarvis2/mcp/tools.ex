@@ -143,7 +143,6 @@ defmodule Jarvis2.MCP.Tools do
   end
 
   def call("report_status", args, %{pane: pane} = caller) when pane != "unknown" do
-    state = value(args, :state)
     summary = value(args, :summary)
 
     if byte_size(summary) <= 256 do
@@ -154,33 +153,7 @@ defmodule Jarvis2.MCP.Tools do
 
       if verified.pane == pane and verified.workspace == caller.workspace and
            verified.agent_kind == caller.agent_kind and verified.agent_name == caller.agent_name do
-        summary = summary |> String.replace(~r/[\p{C}\s]+/u, " ") |> String.trim()
-
-        params = %{
-          pane_id: pane,
-          source: "custom:jarvis2",
-          tokens: %{jarvis: "#{state}: #{summary}"},
-          ttl_ms: 60_000
-        }
-
-        socket = Application.get_env(:jarvis2, :herdr_socket, Socket)
-
-        case Actions.call(:sidebar_tokens, "pane.report_metadata", params,
-               caller: pane,
-               server: socket
-             ) do
-          {:ok, result} ->
-            Phoenix.PubSub.local_broadcast(
-              Jarvis2.PubSub,
-              "mcp:status_reported",
-              {:jarvis2, "mcp:status_reported", %{caller: verified, summary: summary}}
-            )
-
-            {:ok, result}
-
-          error ->
-            action_result(error)
-        end
+        report_sidebar(verified, value(args, :state), summary)
       else
         {:error, "caller pane is unavailable or stale"}
       end
@@ -306,6 +279,36 @@ defmodule Jarvis2.MCP.Tools do
     case view() do
       %{stale: false, snapshot: snapshot} = view when is_map(snapshot) -> {:ok, view}
       _ -> {:error, "Herdr mirror is unavailable or stale"}
+    end
+  end
+
+  defp report_sidebar(verified, state, summary) do
+    summary = summary |> String.replace(~r/[\p{C}\s]+/u, " ") |> String.trim()
+
+    params = %{
+      pane_id: verified.pane,
+      source: "custom:jarvis2",
+      tokens: %{jarvis: "#{state}: #{summary}"},
+      ttl_ms: 60_000
+    }
+
+    socket = Application.get_env(:jarvis2, :herdr_socket, Socket)
+
+    case Actions.call(:sidebar_tokens, "pane.report_metadata", params,
+           caller: verified.pane,
+           server: socket
+         ) do
+      {:ok, result} ->
+        Phoenix.PubSub.local_broadcast(
+          Jarvis2.PubSub,
+          "mcp:status_reported",
+          {:jarvis2, "mcp:status_reported", %{caller: verified, summary: summary}}
+        )
+
+        {:ok, result}
+
+      error ->
+        action_result(error)
     end
   end
 

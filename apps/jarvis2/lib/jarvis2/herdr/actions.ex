@@ -238,28 +238,28 @@ defmodule Jarvis2.Herdr.Actions do
   defp validate_source(caller, view), do: ExecutionGuard.validate(caller, view)
 
   defp verify_execution_pane(caller, created, socket) do
-    with {:ok, %{"snapshot" => %{"panes" => panes, "agents" => agents} = snapshot}}
-         when is_list(panes) and is_list(agents) <-
-           Client.snapshot(server: socket, timeout: 5_000) do
-      case validate_source(caller, %{stale: false, snapshot: snapshot}) do
-        {:ok, _} ->
-          with [pane] <- Enum.filter(panes, &(&1["pane_id"] == created["pane_id"])),
-               true <- pane["workspace_id"] == caller.workspace and pane["tab_id"] == caller.tab,
-               true <-
-                 created["workspace_id"] == caller.workspace and created["tab_id"] == caller.tab,
-               true <-
-                 pane["terminal_id"] == created["terminal_id"] and pane["pane_id"] != caller.pane,
-               true <- Enum.all?(agents, &(&1["pane_id"] != pane["pane_id"])) do
-            :ok
-          else
-            _ -> {:error, :unsafe_pane}
-          end
+    case Client.snapshot(server: socket, timeout: 5_000) do
+      {:ok, %{"snapshot" => %{"panes" => panes, "agents" => agents} = snapshot}}
+      when is_list(panes) and is_list(agents) ->
+        case validate_source(caller, %{stale: false, snapshot: snapshot}) do
+          {:ok, _} -> verify_created_pane(caller, created, panes, agents)
+          _ -> {:error, :unsafe_caller}
+        end
 
-        _ ->
-          {:error, :unsafe_caller}
-      end
+      _ ->
+        {:error, :snapshot_unavailable}
+    end
+  end
+
+  defp verify_created_pane(caller, created, panes, agents) do
+    with [pane] <- Enum.filter(panes, &(&1["pane_id"] == created["pane_id"])),
+         true <- pane["workspace_id"] == caller.workspace and pane["tab_id"] == caller.tab,
+         true <- created["workspace_id"] == caller.workspace and created["tab_id"] == caller.tab,
+         true <- pane["terminal_id"] == created["terminal_id"] and pane["pane_id"] != caller.pane,
+         true <- Enum.all?(agents, &(&1["pane_id"] != pane["pane_id"])) do
+      :ok
     else
-      _ -> {:error, :snapshot_unavailable}
+      _ -> {:error, :unsafe_pane}
     end
   end
 
