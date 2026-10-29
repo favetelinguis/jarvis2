@@ -3,7 +3,7 @@
     "jarvis2": {
       "url": "http://127.0.0.1:4747/mcp",
       "headers": {
-        "Authorization": "!echo Bearer $(cat ~/.local/state/jarvis2/token)",
+        "Authorization": "!echo Bearer ${JARVIS2_RUN_TOKEN:-$(cat ~/.local/state/jarvis2/token)}",
         "X-Herdr-Pane": "${HERDR_PANE_ID}",
         "X-Herdr-Workspace": "${HERDR_WORKSPACE_ID}"
       },
@@ -13,7 +13,11 @@
         "whoami": "direct",
         "report_status": "direct",
         "notify_human": "direct",
-        "elixir_eval": "hidden"
+        "elixir_eval": "hidden",
+        "ask_human": "direct",
+        "request_approval": "direct",
+        "wait_for_answer": "direct",
+        "submit_result": "direct"
       },
       "timeout": 120
     }

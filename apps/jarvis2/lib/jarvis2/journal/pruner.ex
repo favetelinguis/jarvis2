@@ -1,5 +1,5 @@
 defmodule Jarvis2.Journal.Pruner do
-  @moduledoc "Periodically applies the journal retention policy."
+  @moduledoc "Periodically applies the journal retention policy and expires overdue questions."
   use GenServer
 
   @interval :timer.hours(1)
@@ -12,11 +12,16 @@ defmodule Jarvis2.Journal.Pruner do
   end
 
   @impl true
-  def handle_continue(:schedule, interval), do: {:noreply, schedule(interval)}
+  def handle_continue(:schedule, interval) do
+    # Questions that expired while the server was down are closed on boot.
+    Jarvis2.Questions.expire_stale()
+    {:noreply, schedule(interval)}
+  end
 
   @impl true
   def handle_info(:prune, interval) do
     Jarvis2.Journal.prune()
+    Jarvis2.Questions.expire_stale()
     {:noreply, schedule(interval)}
   end
 

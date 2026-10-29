@@ -107,6 +107,8 @@ defmodule Jarvis2.RunsTest do
       {:ok, run} = Runs.create_run(%{name: "demo", task: "write the report", cwd: ctx.cwd})
       Phoenix.PubSub.subscribe(Jarvis2.PubSub, Runs.topic())
 
+      run_id = run.id
+
       assert %Run{status: :working, pane_id: "w1:p9", terminal_id: "term-run"} =
                launched = Runs.launch(run)
 
@@ -117,6 +119,7 @@ defmodule Jarvis2.RunsTest do
       assert split["target_pane_id"] == "w1:p1"
       assert split["cwd"] == ctx.cwd
       assert split["env"]["JARVIS2_RUN_ID"] == run.id
+      assert {:ok, run_id} == Jarvis2.Tokens.resolve(split["env"]["JARVIS2_RUN_TOKEN"])
       assert split["env"]["JARVIS2_MCP_URL"] =~ ~r{^http://127\.0\.0\.1:\d+/mcp$}
       assert split["focus"] == false
 
@@ -125,8 +128,13 @@ defmodule Jarvis2.RunsTest do
       assert start["kind"] == "pi"
       assert start["args"] == ~w(--provider openrouter --model openai/gpt-6-luna --thinking low)
 
-      assert_receive {:request, "agent.prompt",
-                      %{"target" => "w1:p9", "text" => "write the report"}}
+      assert_receive {:request, "agent.prompt", %{"target" => "w1:p9", "text" => text}}
+      assert text =~ ~s(run "demo")
+      assert text =~ "ask_human"
+      assert text =~ "request_approval"
+      assert text =~ "submit_result"
+      assert String.ends_with?(text, "Task:\nwrite the report")
+      assert byte_size(text) <= 8_192
 
       events = Journal.recent(run_id: run.id)
       assert %{outcome: :ok} = Enum.find(events, &(&1.type == "run.start"))

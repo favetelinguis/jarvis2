@@ -86,7 +86,7 @@ defmodule Jarvis2.MCPTest do
       rpc(ctx, headers, %{jsonrpc: "2.0", id: 2, method: "tools/list"})
 
     names = Enum.map(tools, & &1["name"])
-    refute "ask_human" in names
+    assert Enum.all?(~w(ask_human request_approval wait_for_answer submit_result), &(&1 in names))
 
     assert Enum.all?(
              ~w(whoami log blackboard_put blackboard_get blackboard_list list_agents get_layout list_worktrees report_status notify_human read_agent prompt_agent wait_for_event run_mix elixir_eval apply_layout),

@@ -13,7 +13,17 @@ defmodule Jarvis2Web.RunLiveTest do
     Application.put_env(:jarvis2, :live, false)
     Application.put_env(:jarvis2, :live_scenarios, [])
 
+    # A private guard keeps these launches out of the shared per-minute rate limit.
+    guard = start_supervised!({Jarvis2.Herdr.ExecutionGuard, [name: nil]})
+    previous_guard = Application.fetch_env(:jarvis2, :execution_guard)
+    Application.put_env(:jarvis2, :execution_guard, guard)
+
     on_exit(fn ->
+      case previous_guard do
+        {:ok, v} -> Application.put_env(:jarvis2, :execution_guard, v)
+        :error -> Application.delete_env(:jarvis2, :execution_guard)
+      end
+
       for {key, value} <- previous do
         case value do
           {:ok, v} -> Application.put_env(:jarvis2, key, v)

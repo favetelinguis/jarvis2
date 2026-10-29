@@ -6,7 +6,7 @@ defmodule Jarvis2.Runs do
   """
   import Ecto.Query
 
-  alias Jarvis2.{Journal, Repo}
+  alias Jarvis2.{Journal, Questions, Repo, Tokens}
   alias Jarvis2.Runs.{Launcher, Run}
 
   @topic "runs"
@@ -114,6 +114,47 @@ defmodule Jarvis2.Runs do
 
   def focus_run(%Run{} = run), do: Launcher.focus(run)
 
+  @doc "An agent's own report (via MCP) of how it is doing."
+  def report_status(run_id, state, summary) when state in ["working", "blocked", "done"] do
+    with %Run{} = run <- get_run(run_id), true <- Run.active?(run) do
+      updated = progress(run, %{status: String.to_existing_atom(state)})
+
+      # The summary is kept (bounded) because the user started this run and wants to read it.
+      Journal.record(%{
+        source: :mcp,
+        type: "run.report",
+        run_id: run.id,
+        payload: %{state: state, status_summary: summary}
+      })
+
+      {:ok, updated}
+    else
+      _ -> {:error, "The run is not active."}
+    end
+  end
+
+  def report_status(_run_id, _state, _summary),
+    do: {:error, "state must be working, blocked or done"}
+
+  @doc "An agent's final result (via MCP): finishes the run and closes its credentials."
+  def submit_result(run_id, summary, artifacts) do
+    with %Run{} = run <- get_run(run_id), true <- Run.active?(run) do
+      updated =
+        progress(run, %{
+          status: :done,
+          finished_at: now(),
+          result: %{summary: summary, artifacts: artifacts}
+        })
+
+      Tokens.revoke_for_run(run.id)
+      Questions.cancel_for_run(run.id)
+      record(updated, "run.result", %{artifacts: length(artifacts)})
+      {:ok, updated}
+    else
+      _ -> {:error, "The run is not active."}
+    end
+  end
+
   def prompt_run(%Run{} = run, text) when is_binary(text) do
     text = String.trim(text)
 
@@ -187,6 +228,13 @@ defmodule Jarvis2.Runs do
     attrs = if attrs.result, do: attrs, else: Map.delete(attrs, :result)
 
     {:ok, run} = run |> Run.progress_changeset(attrs) |> Repo.update()
+
+    # A run that can no longer act must not keep credentials or open questions.
+    if run.status in [:failed, :lost, :stopped] do
+      Tokens.revoke_for_run(run.id)
+      Questions.cancel_for_run(run.id)
+    end
+
     broadcast(run)
     run
   end

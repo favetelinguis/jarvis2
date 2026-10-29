@@ -25,10 +25,20 @@ defmodule Jarvis2Web.MCPPlug do
     end
   end
 
+  # The long-lived file token (agents not started as runs) or a live per-run token.
   defp authorized?(conn) do
     case get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> Plug.Crypto.secure_compare(token, Jarvis2.Token.get())
-      _ -> false
+      ["Bearer j2r_" <> _ = header] ->
+        match?(
+          {:ok, _},
+          header |> String.replace_prefix("Bearer ", "") |> Jarvis2.Tokens.resolve()
+        )
+
+      ["Bearer " <> token] ->
+        Plug.Crypto.secure_compare(token, Jarvis2.Token.get())
+
+      _ ->
+        false
     end
   end
 

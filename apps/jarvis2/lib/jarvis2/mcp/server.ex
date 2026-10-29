@@ -2,7 +2,7 @@ defmodule Jarvis2.MCP.Server do
   @moduledoc false
   use Anubis.Server, name: "jarvis2", version: "0.1.0", capabilities: [:tools, :resources]
   alias Anubis.Server.{Frame, Handlers, Response}
-  alias Jarvis2.MCP.{Identity, Tools}
+  alias Jarvis2.MCP.{Caller, Tools}
   require Logger
 
   @tools [
@@ -45,10 +45,24 @@ defmodule Jarvis2.MCP.Server do
      }},
     {"apply_layout", "Create a new developer tab in your workspace (dry-run by default).",
      %{name: {:required, {:enum, ["dev"]}}}},
+    {"ask_human",
+     "Ask the human a question; returns a ticket. Poll wait_for_answer until it is no longer pending.",
+     %{prompt: {:required, :string}, options: {:list, :string}}},
+    {"request_approval",
+     "Ask the human to approve or deny an action before you take it; returns a ticket for wait_for_answer.",
+     %{action: {:required, :string}, detail: :string}},
+    {"wait_for_answer",
+     "Wait up to timeout_s seconds (default 30, max 100) for a ticket's answer.",
+     %{ticket: {:required, :string}, timeout_s: :integer}},
+    {"submit_result", "Finish your run with a summary and optional artifact paths or URLs.",
+     %{summary: {:required, :string}, artifacts: {:list, :string}}},
     {"elixir_eval",
      "Evaluate Elixir in this VM. Disabled unless explicitly enabled; not sandboxed.",
      %{code: {:required, :string}}}
   ]
+  # Tools that change something; refused when the caller's identity does not match its run.
+  @write_tools ~w(report_status notify_human blackboard_put prompt_agent spawn_agent run_command apply_layout ask_human request_approval submit_result)
+
   @resources ~w(jarvis2://session jarvis2://layout jarvis2://worktrees jarvis2://events/recent jarvis2://journal jarvis2://blackboard)
 
   @impl true
@@ -78,7 +92,7 @@ defmodule Jarvis2.MCP.Server do
 
   @impl true
   def handle_request(%{"method" => "tools/call"} = request, frame) do
-    caller = Identity.resolve(frame.context.headers)
+    caller = Caller.resolve(frame.context.headers)
     frame = Frame.assign(frame, :jarvis2_caller, caller)
     result = dispatch_tool_request(request, frame)
 
@@ -103,6 +117,7 @@ defmodule Jarvis2.MCP.Server do
 
     Jarvis2.Journal.record(%{
       source: :mcp,
+      run_id: caller[:run_id],
       type: "tool." <> name,
       outcome: String.to_existing_atom(outcome),
       payload: %{caller: caller, args: args}
@@ -142,7 +157,7 @@ defmodule Jarvis2.MCP.Server do
 
   @impl true
   def handle_tool_call(name, args, frame) do
-    caller = frame.assigns[:jarvis2_caller] || Identity.resolve(frame.context.headers)
+    caller = frame.assigns[:jarvis2_caller] || Caller.resolve(frame.context.headers)
 
     progress = fn step, message ->
       if token = Frame.progress_token(frame) do
@@ -158,7 +173,7 @@ defmodule Jarvis2.MCP.Server do
 
     response =
       try do
-        case Tools.call(name, args, caller, progress) do
+        case call_tool(name, args, caller, progress) do
           {:ok, value} -> Response.json(Response.tool(), value)
           {:error, message} -> Response.error(Response.tool(), message)
         end
@@ -168,6 +183,11 @@ defmodule Jarvis2.MCP.Server do
 
     {:reply, response, frame}
   end
+
+  defp call_tool(name, _args, %{mismatch: true}, _progress) when name in @write_tools,
+    do: {:error, "caller identity does not match the run's pane"}
+
+  defp call_tool(name, args, caller, progress), do: Tools.call(name, args, caller, progress)
 
   @impl true
   def handle_resource_read(uri, frame) do

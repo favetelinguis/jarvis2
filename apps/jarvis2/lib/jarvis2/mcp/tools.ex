@@ -1,7 +1,7 @@
 defmodule Jarvis2.MCP.Tools do
   @moduledoc false
   require Logger
-  alias Jarvis2.Fleet
+  alias Jarvis2.{Fleet, Questions, Runs}
   alias Jarvis2.Herdr.{Actions, Client, Mirror, Socket}
   alias Jarvis2.MCP.{Eval, EventWait, Identity, MixRunner}
 
@@ -82,6 +82,63 @@ defmodule Jarvis2.MCP.Tools do
       worktrees = if repo, do: Map.take(view.worktrees, [repo]), else: view.worktrees
       errors = if repo, do: Map.take(view.worktree_errors, [repo]), else: view.worktree_errors
       {:ok, %{worktrees: worktrees, errors: errors}}
+    end
+  end
+
+  def call("ask_human", args, %{run_id: run_id}) when is_binary(run_id) do
+    ask(run_id, :question, %{prompt: value(args, :prompt), options: value(args, :options) || []})
+  end
+
+  def call("request_approval", args, %{run_id: run_id}) when is_binary(run_id) do
+    ask(run_id, :approval, %{
+      prompt: value(args, :action),
+      detail: value(args, :detail),
+      options: ["approve", "deny"]
+    })
+  end
+
+  def call("wait_for_answer", args, %{run_id: run_id}) when is_binary(run_id) do
+    timeout_s = value(args, :timeout_s) || 30
+
+    if is_integer(timeout_s) and timeout_s in 1..100 do
+      case Questions.wait(value(args, :ticket), run_id, timeout_s * 1_000) do
+        nil -> {:error, "unknown ticket"}
+        question -> {:ok, ticket_status(question)}
+      end
+    else
+      {:error, "timeout_s must be between 1 and 100 seconds"}
+    end
+  end
+
+  def call("submit_result", args, %{run_id: run_id}) when is_binary(run_id) do
+    summary = value(args, :summary)
+    artifacts = value(args, :artifacts) || []
+
+    if byte_size(summary) in 1..2_000 and length(artifacts) <= 20 and
+         Enum.all?(artifacts, &(byte_size(&1) <= 500)) do
+      with {:ok, run} <- Runs.submit_result(run_id, summary, artifacts),
+           do: {:ok, %{run: run.id, status: run.status}}
+    else
+      {:error, "summary or artifacts are invalid or too long"}
+    end
+  end
+
+  def call(name, _args, _caller)
+      when name in ~w(ask_human request_approval wait_for_answer submit_result),
+      do: {:error, "this tool requires a run token"}
+
+  def call("report_status", args, %{run_id: run_id} = caller) when is_binary(run_id) do
+    state = value(args, :state)
+    summary = value(args, :summary)
+
+    with true <- byte_size(summary) <= 256 || {:error, "summary is too long"},
+         {:ok, _run} <- Runs.report_status(run_id, state, summary) do
+      sidebar =
+        if caller.pane == "unknown",
+          do: {:ok, :skipped},
+          else: call("report_status", args, Map.delete(caller, :run_id))
+
+      {:ok, %{run_status: state, sidebar: sidebar_result(sidebar)}}
     end
   end
 
@@ -260,6 +317,28 @@ defmodule Jarvis2.MCP.Tools do
       _ -> {:error, "Herdr mirror is unavailable or stale"}
     end
   end
+
+  defp ask(run_id, kind, attrs) do
+    case Questions.ask(run_id, Map.put(attrs, :kind, kind)) do
+      {:ok, question} ->
+        {:ok, ticket_status(question)}
+
+      {:error, :too_many} ->
+        {:error, "too many open questions; wait for answers first"}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:error, "invalid question: check the text and options"}
+    end
+  end
+
+  defp ticket_status(question) do
+    base = %{ticket: question.id, status: Atom.to_string(question.status)}
+    if question.status == :answered, do: Map.put(base, :answer, question.answer), else: base
+  end
+
+  defp sidebar_result({:ok, :skipped}), do: "skipped"
+  defp sidebar_result({:ok, result}), do: result
+  defp sidebar_result({:error, _}), do: "unavailable"
 
   defp value(args, key), do: Map.get(args, key, Map.get(args, Atom.to_string(key)))
   defp valid_key?(key), do: is_binary(key) and byte_size(key) in 1..256
