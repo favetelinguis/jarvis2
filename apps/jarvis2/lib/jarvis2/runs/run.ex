@@ -41,7 +41,7 @@ defmodule Jarvis2.Runs.Run do
     |> validate_length(:task, max: 6_000, count: :bytes)
     |> validate_inclusion(:kind, Jarvis2.Herdr.Actions.agent_kinds())
     |> validate_inclusion(:thinking, @thinking)
-    |> validate_model()
+    |> validate_model_field(:model)
     |> validate_cwd()
   end
 
@@ -59,12 +59,13 @@ defmodule Jarvis2.Runs.Run do
   end
 
   # The model becomes agent arguments typed into a shell, so only plain identifier characters pass.
-  defp validate_model(changeset) do
-    validate_change(changeset, :model, fn :model, model ->
+  @doc false
+  def validate_model_field(changeset, field) do
+    validate_change(changeset, field, fn ^field, model ->
       if Regex.match?(~r{\A[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:/-]*\z}, model) and
            byte_size(model) <= 128,
          do: [],
-         else: [model: "must look like provider/model"]
+         else: [{field, "must look like provider/model"}]
     end)
   end
 

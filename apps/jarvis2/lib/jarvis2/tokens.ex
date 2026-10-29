@@ -43,6 +43,26 @@ defmodule Jarvis2.Tokens do
 
   def resolve(_other), do: :error
 
+  @doc "Unexpired, unrevoked tokens, newest first (hashes only; plain tokens are never stored)."
+  def list_active do
+    now = DateTime.utc_now()
+
+    Repo.all(
+      from t in ApiToken,
+        where: is_nil(t.revoked_at) and t.expires_at > ^now,
+        order_by: [desc: t.inserted_at]
+    )
+  end
+
+  def revoke(id) do
+    {count, _} =
+      Repo.update_all(from(t in ApiToken, where: t.id == ^id and is_nil(t.revoked_at)),
+        set: [revoked_at: DateTime.utc_now()]
+      )
+
+    if count == 1, do: :ok, else: :error
+  end
+
   def revoke_for_run(run_id) do
     Repo.update_all(
       from(t in ApiToken, where: t.run_id == ^run_id and is_nil(t.revoked_at)),

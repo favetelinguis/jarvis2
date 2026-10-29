@@ -9,6 +9,7 @@ if config_env() == :test do
     events: false,
     scenarios: false,
     run_monitor: false,
+    apply_settings: false,
     live: false,
     allow_eval: false
 
@@ -34,22 +35,25 @@ else
   known_scenarios =
     ~w(attention agent_prompt agent_spawn run_command test_loop declarative_layout sidebar_tokens pane_hygiene output_watcher custom_worker)
 
-  scenarios =
-    "JARVIS2_SCENARIOS"
-    |> System.get_env("")
-    |> String.split(",", trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.map(fn name ->
-      if name in known_scenarios,
-        do: String.to_atom(name),
-        else: raise("unknown JARVIS2_SCENARIOS entry #{inspect(name)}")
-    end)
+  # Optional lock-down: only these scenarios may ever be enabled from the UI.
+  allowed_scenarios =
+    case System.get_env("JARVIS2_SCENARIOS") do
+      nil ->
+        nil
+
+      list ->
+        for name <- String.split(list, ",", trim: true), name = String.trim(name) do
+          if name in known_scenarios,
+            do: String.to_atom(name),
+            else: raise("unknown JARVIS2_SCENARIOS entry #{inspect(name)}")
+        end
+    end
 
   config :jarvis2,
     port: port,
     state_dir: state_dir,
     live: System.get_env("JARVIS2_LIVE") == "1",
-    live_scenarios: scenarios,
+    allowed_scenarios: allowed_scenarios,
     anchor_pane: System.get_env("HERDR_PANE_ID"),
     allow_eval: System.get_env("JARVIS2_ALLOW_EVAL") == "1",
     mix_project_dir: File.cwd!()

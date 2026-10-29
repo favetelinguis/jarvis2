@@ -28,6 +28,7 @@ defmodule Jarvis2Web.Router do
       on_mount: [{Jarvis2Web.Auth, :require_authenticated}, {Jarvis2Web.InboxCount, :default}] do
       live "/", DashboardLive
       live "/inbox", InboxLive
+      live "/settings", SettingsLive
       live "/runs", RunLive.Index
       live "/runs/new", RunLive.New
       live "/runs/:id", RunLive.Show

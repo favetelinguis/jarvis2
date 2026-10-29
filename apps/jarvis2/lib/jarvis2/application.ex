@@ -29,6 +29,9 @@ defmodule Jarvis2.Application do
 
     with {:ok, _} = started <-
            Supervisor.start_link(children, strategy: :rest_for_one, name: Jarvis2.Supervisor) do
+      if Application.get_env(:jarvis2, :apply_settings, true),
+        do: Jarvis2.Settings.apply_settings()
+
       announce_login()
       started
     end

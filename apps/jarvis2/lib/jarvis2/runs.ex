@@ -14,7 +14,15 @@ defmodule Jarvis2.Runs do
 
   def topic, do: @topic
 
-  def defaults, do: %{kind: "pi", model: "openrouter/openai/gpt-6-luna", thinking: "low"}
+  def defaults do
+    settings = Jarvis2.Settings.get()
+
+    %{
+      kind: settings.default_kind,
+      model: settings.default_model,
+      thinking: settings.default_thinking
+    }
+  end
 
   def change_run(run \\ %Run{}, attrs \\ %{}), do: Run.changeset(run, attrs)
 
