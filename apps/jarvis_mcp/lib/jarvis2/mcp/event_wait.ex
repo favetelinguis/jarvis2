@@ -8,12 +8,12 @@ defmodule Jarvis2.MCP.EventWait do
 
     if valid_type?(type) and valid_filters?(filters) do
       topic = "herdr:" <> type
-      :ok = Jarvis2.Bus.subscribe(topic)
+      :ok = Phoenix.PubSub.subscribe(Jarvis2.PubSub, topic)
 
       try do
         receive_matching(topic, filters, System.monotonic_time(:millisecond) + timeout_s * 1_000)
       after
-        Jarvis2.Bus.unsubscribe(topic)
+        Phoenix.PubSub.unsubscribe(Jarvis2.PubSub, topic)
       end
     else
       {:error, "invalid event type or filters"}

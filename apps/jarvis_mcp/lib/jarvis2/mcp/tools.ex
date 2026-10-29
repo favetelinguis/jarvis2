@@ -120,7 +120,12 @@ defmodule Jarvis2.MCP.Tools do
               expires_at
             )
 
-            Jarvis2.Bus.publish("mcp:status_reported", %{caller: verified, summary: summary})
+            Phoenix.PubSub.local_broadcast(
+              Jarvis2.PubSub,
+              "mcp:status_reported",
+              {:jarvis2, "mcp:status_reported", %{caller: verified, summary: summary}}
+            )
+
             {:ok, result}
 
           error ->

@@ -106,7 +106,12 @@ defmodule Jarvis2.Herdr.Mirror do
 
           log_snapshot(old, snapshot)
           state = update_layout_diff(state)
-          Jarvis2.Bus.publish("mirror:updated", %{source: self(), view: view(state)})
+
+          Phoenix.PubSub.local_broadcast(
+            Jarvis2.PubSub,
+            "mirror:updated",
+            {:jarvis2, "mirror:updated", %{source: self(), view: view(state)}}
+          )
 
           if Enum.any?(errors, fn {_repo, code} -> code == "worktree_busy" end),
             do: retry(%{state | dirty: true}),
@@ -190,7 +195,12 @@ defmodule Jarvis2.Herdr.Mirror do
       "Herdr layout diff status=#{status} changes=#{length(changes)} truncated=#{truncated}"
     )
 
-    Jarvis2.Bus.publish("mirror:layout_diff", %{source: self(), diff: diff})
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mirror:layout_diff",
+      {:jarvis2, "mirror:layout_diff", %{source: self(), diff: diff}}
+    )
+
     %{state | diff_sequence: diff.sequence, layout_diff: diff}
   end
 

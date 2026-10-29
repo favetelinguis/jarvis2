@@ -569,13 +569,24 @@ defmodule Jarvis2.MCPTest do
       end)
 
     eventually(fn -> Registry.lookup(Jarvis2.PubSub, topic) != [] end)
-    Jarvis2.Bus.publish(topic, %{type: "pane.jarvis_test", data: %{"pane_id" => "w1:p2"}})
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      topic,
+      {:jarvis2, topic, %{type: "pane.jarvis_test", data: %{"pane_id" => "w1:p2"}}}
+    )
+
     assert Task.yield(task, 50) == nil
 
-    Jarvis2.Bus.publish(topic, %{
-      type: "pane.jarvis_test",
-      data: %{"pane_id" => "w1:p1", "agent_status" => "done"}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      topic,
+      {:jarvis2, topic,
+       %{
+         type: "pane.jarvis_test",
+         data: %{"pane_id" => "w1:p1", "agent_status" => "done"}
+       }}
+    )
 
     assert Task.await(task, 3_000)["event"]["data"]["agent_status"] == "done"
     assert Registry.lookup(Jarvis2.PubSub, topic) == []
@@ -605,7 +616,12 @@ defmodule Jarvis2.MCPTest do
     producer =
       Task.async(fn ->
         for _ <- 1..150 do
-          Jarvis2.Bus.publish(topic, %{type: "pane.jarvis_flood", data: %{}})
+          Phoenix.PubSub.local_broadcast(
+            Jarvis2.PubSub,
+            topic,
+            {:jarvis2, topic, %{type: "pane.jarvis_flood", data: %{}}}
+          )
+
           Process.sleep(20)
         end
       end)

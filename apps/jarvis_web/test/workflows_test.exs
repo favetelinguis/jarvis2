@@ -140,14 +140,19 @@ defmodule Jarvis2.WorkflowsTest do
 
   defp status_change(status),
     do:
-      Jarvis2.Bus.publish("herdr:pane.agent_status_changed", %{
-        data: %{"pane_id" => "w1:p1", "agent_status" => status}
-      })
+      Phoenix.PubSub.local_broadcast(
+        Jarvis2.PubSub,
+        "herdr:pane.agent_status_changed",
+        {:jarvis2, "herdr:pane.agent_status_changed",
+         %{
+           data: %{"pane_id" => "w1:p1", "agent_status" => status}
+         }}
+      )
 
   test "test loop runs mix test after a turn and prompts the agent only on failure" do
     boot(agent: "idle", output: "1 failure\nJARVIS2_EXIT_2\n")
     start_supervised!({TestLoop, [name: nil]})
-    Jarvis2.Bus.subscribe("scenario:test_loop")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "scenario:test_loop")
     config(:live, true)
     config(:live_scenarios, [:test_loop, :run_command, :agent_prompt])
     status_change("working")
@@ -166,7 +171,7 @@ defmodule Jarvis2.WorkflowsTest do
   test "test loop does not prompt when tests pass, in dry mode, or outside the project" do
     boot(agent: "idle", output: "ok\nJARVIS2_EXIT_0\n")
     start_supervised!({TestLoop, [name: nil]})
-    Jarvis2.Bus.subscribe("scenario:test_loop")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "scenario:test_loop")
     status_change("working")
     status_change("idle")
     refute_receive {:request, _, _}, 200

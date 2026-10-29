@@ -12,7 +12,7 @@ defmodule Jarvis2.Scenarios.Attention do
   @impl true
   def init(opts) do
     for topic <- ~w(herdr:pane.agent_status_changed herdr:pane.focused herdr:pane.closed),
-        do: Jarvis2.Bus.subscribe(topic)
+        do: Phoenix.PubSub.subscribe(Jarvis2.PubSub, topic)
 
     {:ok, %{socket: Keyword.get(opts, :socket, Socket), active: MapSet.new(), timeline: %{}}}
   end
@@ -80,7 +80,13 @@ defmodule Jarvis2.Scenarios.Attention do
     })
 
     invoke(state, pane, "client.window_title.set", %{title: "Jarvis2: agent #{status}"})
-    Jarvis2.Bus.publish("scenario:attention", %{pane: pane, state: status, previous_ms: duration})
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "scenario:attention",
+      {:jarvis2, "scenario:attention", %{pane: pane, state: status, previous_ms: duration}}
+    )
+
     %{state | active: MapSet.put(state.active, pane)}
   end
 
@@ -96,7 +102,12 @@ defmodule Jarvis2.Scenarios.Attention do
         })
       end
 
-      Jarvis2.Bus.publish("scenario:attention", %{pane: pane, state: "cleared"})
+      Phoenix.PubSub.local_broadcast(
+        Jarvis2.PubSub,
+        "scenario:attention",
+        {:jarvis2, "scenario:attention", %{pane: pane, state: "cleared"}}
+      )
+
       %{state | active: active}
     else
       state

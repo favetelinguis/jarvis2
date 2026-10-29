@@ -28,7 +28,7 @@ defmodule Jarvis2.Scenarios.TestLoop do
   @impl true
   def init(_) do
     for topic <- ~w(herdr:pane.agent_status_changed herdr:pane.closed),
-        do: Jarvis2.Bus.subscribe(topic)
+        do: Phoenix.PubSub.subscribe(Jarvis2.PubSub, topic)
 
     {:ok, %{panes: %{}, active: %{}}}
   end
@@ -63,7 +63,13 @@ defmodule Jarvis2.Scenarios.TestLoop do
       end
 
     Logger.info("Herdr test loop pane=#{inspect(pane)} result=#{result}")
-    Jarvis2.Bus.publish("scenario:test_loop", %{pane: pane, result: result})
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "scenario:test_loop",
+      {:jarvis2, "scenario:test_loop", %{pane: pane, result: result}}
+    )
+
     {:noreply, state}
   end
 

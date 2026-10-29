@@ -103,7 +103,13 @@ defmodule Jarvis2.MCP.Server do
     }
 
     Jarvis2.State.journal(entry)
-    Jarvis2.Bus.publish("mcp:tool_call", entry)
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:tool_call",
+      {:jarvis2, "mcp:tool_call", entry}
+    )
+
     Logger.info("MCP tool=#{inspect(name)} pane=#{inspect(caller.pane)} outcome=#{outcome}")
     result
   end

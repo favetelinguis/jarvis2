@@ -128,7 +128,7 @@ defmodule Jarvis2.HerdrEventsTest do
     mirror: mirror,
     path: path
   } do
-    Jarvis2.Bus.subscribe("mirror:layout_diff")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "mirror:layout_diff")
     start_events(path, mirror)
     assert_receive {:subscription, lifecycle, _}, 1_000
     eventually(fn -> not Mirror.get(mirror).stale end)
@@ -215,8 +215,8 @@ defmodule Jarvis2.HerdrEventsTest do
     path: path
   } do
     Agent.update(fixture, &%{&1 | snapshot: snapshot(["w1:p1"])})
-    Jarvis2.Bus.subscribe("herdr:pane.agent_status_changed")
-    Jarvis2.Bus.subscribe("herdr:pane.output_matched")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "herdr:pane.agent_status_changed")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "herdr:pane.output_matched")
     start_events(path, mirror)
     assert_receive {:subscription, _lifecycle, _}, 1_000
     assert_receive {:subscription, pane, _}, 1_000

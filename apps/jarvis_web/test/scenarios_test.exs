@@ -20,14 +20,19 @@ defmodule Jarvis2.ScenariosTest do
 
   test "output watcher logs metadata without exposing the matched line in dry mode" do
     start_supervised!({OutputWatcher, [name: nil]})
-    Jarvis2.Bus.subscribe("scenario:output_watcher")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "scenario:output_watcher")
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        Jarvis2.Bus.publish("herdr:pane.output_matched", %{
-          type: "pane.output_matched",
-          data: %{"pane_id" => "w1:p1", "matched_line" => "FAIL token=private-value"}
-        })
+        Phoenix.PubSub.local_broadcast(
+          Jarvis2.PubSub,
+          "herdr:pane.output_matched",
+          {:jarvis2, "herdr:pane.output_matched",
+           %{
+             type: "pane.output_matched",
+             data: %{"pane_id" => "w1:p1", "matched_line" => "FAIL token=private-value"}
+           }}
+        )
 
         assert_receive {:jarvis2, "scenario:output_watcher", %{pane: "w1:p1", dry_run: true}},
                        1_000
@@ -40,7 +45,7 @@ defmodule Jarvis2.ScenariosTest do
 
   test "attention notifies once for a transition and clears on focus" do
     start_supervised!({Attention, [name: nil]})
-    Jarvis2.Bus.subscribe("scenario:attention")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "scenario:attention")
 
     status = %{
       type: "pane.agent_status_changed",
@@ -49,15 +54,31 @@ defmodule Jarvis2.ScenariosTest do
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        Jarvis2.Bus.publish("herdr:pane.agent_status_changed", status)
+        Phoenix.PubSub.local_broadcast(
+          Jarvis2.PubSub,
+          "herdr:pane.agent_status_changed",
+          {:jarvis2, "herdr:pane.agent_status_changed", status}
+        )
+
         assert_receive {:jarvis2, "scenario:attention", %{pane: "w1:p1", state: "blocked"}}, 1_000
-        Jarvis2.Bus.publish("herdr:pane.agent_status_changed", status)
+
+        Phoenix.PubSub.local_broadcast(
+          Jarvis2.PubSub,
+          "herdr:pane.agent_status_changed",
+          {:jarvis2, "herdr:pane.agent_status_changed", status}
+        )
+
         refute_receive {:jarvis2, "scenario:attention", %{pane: "w1:p1", state: "blocked"}}, 50
 
-        Jarvis2.Bus.publish("herdr:pane.focused", %{
-          type: "pane.focused",
-          data: %{"pane_id" => "w1:p1"}
-        })
+        Phoenix.PubSub.local_broadcast(
+          Jarvis2.PubSub,
+          "herdr:pane.focused",
+          {:jarvis2, "herdr:pane.focused",
+           %{
+             type: "pane.focused",
+             data: %{"pane_id" => "w1:p1"}
+           }}
+        )
 
         assert_receive {:jarvis2, "scenario:attention", %{pane: "w1:p1", state: "cleared"}}, 1_000
       end)
@@ -93,13 +114,18 @@ defmodule Jarvis2.ScenariosTest do
     Application.put_env(:jarvis2, :live_scenarios, [:attention, :output_watcher])
     start_supervised!({Attention, [name: nil, socket: socket]})
     start_supervised!({OutputWatcher, [name: nil, socket: socket]})
-    Jarvis2.Bus.subscribe("scenario:attention")
-    Jarvis2.Bus.subscribe("scenario:output_watcher")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "scenario:attention")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "scenario:output_watcher")
 
-    Jarvis2.Bus.publish("herdr:pane.agent_status_changed", %{
-      type: "pane.agent_status_changed",
-      data: %{"pane_id" => "w1:p1", "agent_status" => "blocked"}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_status_changed",
+      {:jarvis2, "herdr:pane.agent_status_changed",
+       %{
+         type: "pane.agent_status_changed",
+         data: %{"pane_id" => "w1:p1", "agent_status" => "blocked"}
+       }}
+    )
 
     assert_receive {:herdr_write,
                     %{"method" => "notification.show", "params" => %{"sound" => "request"}}},
@@ -108,25 +134,40 @@ defmodule Jarvis2.ScenariosTest do
     assert_receive {:herdr_write, %{"method" => "client.window_title.set"}}, 1_000
     assert_receive {:jarvis2, "scenario:attention", %{pane: "w1:p1", state: "blocked"}}, 1_000
 
-    Jarvis2.Bus.publish("herdr:pane.focused", %{
-      type: "pane.focused",
-      data: %{"pane_id" => "w1:p2"}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.focused",
+      {:jarvis2, "herdr:pane.focused",
+       %{
+         type: "pane.focused",
+         data: %{"pane_id" => "w1:p2"}
+       }}
+    )
 
     refute_receive {:herdr_write, _}, 50
 
-    Jarvis2.Bus.publish("herdr:pane.focused", %{
-      type: "pane.focused",
-      data: %{"pane_id" => "w1:p1"}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.focused",
+      {:jarvis2, "herdr:pane.focused",
+       %{
+         type: "pane.focused",
+         data: %{"pane_id" => "w1:p1"}
+       }}
+    )
 
     assert_receive {:herdr_write, %{"method" => "client.window_title.clear"}}, 1_000
     assert_receive {:jarvis2, "scenario:attention", %{pane: "w1:p1", state: "cleared"}}, 1_000
 
-    Jarvis2.Bus.publish("herdr:pane.output_matched", %{
-      type: "pane.output_matched",
-      data: %{"pane_id" => "w1:p1", "matched_line" => "FAIL test"}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.output_matched",
+      {:jarvis2, "herdr:pane.output_matched",
+       %{
+         type: "pane.output_matched",
+         data: %{"pane_id" => "w1:p1", "matched_line" => "FAIL test"}
+       }}
+    )
 
     assert_receive {:herdr_write,
                     %{"method" => "notification.show", "params" => %{"body" => "FAIL test"}}},

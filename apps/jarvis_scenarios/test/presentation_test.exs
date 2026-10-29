@@ -55,22 +55,56 @@ defmodule Jarvis2.PresentationTest do
       agent_name: "worker"
     }
 
-    Jarvis2.Bus.publish("herdr:pane.agent_status_changed", %{
-      data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent_status" => "working"}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_status_changed",
+      {:jarvis2, "herdr:pane.agent_status_changed",
+       %{
+         data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent_status" => "working"}
+       }}
+    )
 
-    Jarvis2.Bus.publish("mcp:tool_call", %{caller: caller, tool: "log", outcome: "ok"})
-    Jarvis2.Bus.publish("mcp:tool_call", %{caller: caller, tool: "report_status", outcome: "ok"})
-    Jarvis2.Bus.publish("mcp:status_reported", %{caller: caller, summary: "ship feature"})
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:tool_call",
+      {:jarvis2, "mcp:tool_call", %{caller: caller, tool: "log", outcome: "ok"}}
+    )
 
-    Jarvis2.Bus.publish("herdr:pane.agent_detected", %{
-      data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent" => "pi", "released" => false}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:tool_call",
+      {:jarvis2, "mcp:tool_call", %{caller: caller, tool: "report_status", outcome: "ok"}}
+    )
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:status_reported",
+      {:jarvis2, "mcp:status_reported", %{caller: caller, summary: "ship feature"}}
+    )
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_detected",
+      {:jarvis2, "herdr:pane.agent_detected",
+       %{
+         data: %{
+           "pane_id" => "w1:p1",
+           "workspace_id" => "w1",
+           "agent" => "pi",
+           "released" => false
+         }
+       }}
+    )
 
     refute_receive {:write, _}, 100
     fresh = view(false)
     :ok = GenServer.call(mirror, {:put, fresh})
-    Jarvis2.Bus.publish("mirror:updated", %{source: mirror, view: fresh})
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mirror:updated",
+      {:jarvis2, "mirror:updated", %{source: mirror, view: fresh}}
+    )
 
     assert_receive {:write,
                     %{
@@ -127,18 +161,42 @@ defmodule Jarvis2.PresentationTest do
       agent_name: "worker"
     }
 
-    Jarvis2.Bus.publish("mcp:tool_call", %{caller: caller, tool: "log", outcome: "ok"})
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:tool_call",
+      {:jarvis2, "mcp:tool_call", %{caller: caller, tool: "log", outcome: "ok"}}
+    )
 
-    Jarvis2.Bus.publish("herdr:pane.agent_status_changed", %{
-      data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent_status" => "done"}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_status_changed",
+      {:jarvis2, "herdr:pane.agent_status_changed",
+       %{
+         data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent_status" => "done"}
+       }}
+    )
 
-    Jarvis2.Bus.publish("mcp:status_reported", %{caller: caller, summary: "wrong workspace"})
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:status_reported",
+      {:jarvis2, "mcp:status_reported", %{caller: caller, summary: "wrong workspace"}}
+    )
+
     refute_receive {:write, _}, 150
 
-    Jarvis2.Bus.publish("herdr:pane.agent_detected", %{
-      data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent" => "pi", "released" => false}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_detected",
+      {:jarvis2, "herdr:pane.agent_detected",
+       %{
+         data: %{
+           "pane_id" => "w1:p1",
+           "workspace_id" => "w1",
+           "agent" => "pi",
+           "released" => false
+         }
+       }}
+    )
 
     assert_receive {:write,
                     %{
@@ -159,11 +217,20 @@ defmodule Jarvis2.PresentationTest do
       {Presentation, [name: nil, mirror: mirror, socket: socket, debounce_ms: 20]}
     )
 
-    Jarvis2.Bus.publish("herdr:pane.agent_detected", %{
-      data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent" => "pi"}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_detected",
+      {:jarvis2, "herdr:pane.agent_detected",
+       %{
+         data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent" => "pi"}
+       }}
+    )
 
-    Jarvis2.Bus.publish("mcp:tool_call", %{caller: %{pane: "w1:p1", workspace: "w1"}, tool: "log"})
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:tool_call",
+      {:jarvis2, "mcp:tool_call", %{caller: %{pane: "w1:p1", workspace: "w1"}, tool: "log"}}
+    )
 
     assert_receive {:write, %{"method" => "workspace.report_metadata"}}, 1_000
     refute_receive {:write, _}, 150
@@ -184,12 +251,28 @@ defmodule Jarvis2.PresentationTest do
       agent_name: "worker"
     }
 
-    Jarvis2.Bus.publish("mcp:tool_call", %{caller: caller, tool: "log"})
-    Jarvis2.Bus.publish("mcp:status_reported", %{caller: caller, summary: "task"})
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:tool_call",
+      {:jarvis2, "mcp:tool_call", %{caller: caller, tool: "log"}}
+    )
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:status_reported",
+      {:jarvis2, "mcp:status_reported", %{caller: caller, summary: "task"}}
+    )
+
     refute_receive {:write, _}, 100
     moved = put_in(view(false), [:snapshot, "panes", Access.at(0), "workspace_id"], "w2")
     :ok = GenServer.call(mirror, {:put, moved})
-    Jarvis2.Bus.publish("mirror:updated", %{source: mirror, view: moved})
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mirror:updated",
+      {:jarvis2, "mirror:updated", %{source: mirror, view: moved}}
+    )
+
     refute_receive {:write, _}, 150
   end
 
@@ -222,13 +305,24 @@ defmodule Jarvis2.PresentationTest do
       {Presentation, [name: nil, mirror: mirror, socket: socket, debounce_ms: 20]}
     )
 
-    Jarvis2.Bus.publish("herdr:pane.agent_detected", %{
-      data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent" => "pi"}
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_detected",
+      {:jarvis2, "herdr:pane.agent_detected",
+       %{
+         data: %{"pane_id" => "w1:p1", "workspace_id" => "w1", "agent" => "pi"}
+       }}
+    )
 
     assert_receive {:attempt, %{"method" => "pane.rename"}}, 1_000
     Process.sleep(1_100)
-    Jarvis2.Bus.publish("mirror:updated", %{source: mirror, view: fresh})
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mirror:updated",
+      {:jarvis2, "mirror:updated", %{source: mirror, view: fresh}}
+    )
+
     refute_receive {:attempt, _}, 600
   end
 

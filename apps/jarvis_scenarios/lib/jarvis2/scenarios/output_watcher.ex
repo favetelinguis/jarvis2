@@ -11,7 +11,7 @@ defmodule Jarvis2.Scenarios.OutputWatcher do
 
   @impl true
   def init(opts) do
-    Jarvis2.Bus.subscribe("herdr:pane.output_matched")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "herdr:pane.output_matched")
     {:ok, %{socket: Keyword.get(opts, :socket, Socket)}}
   end
 
@@ -36,10 +36,15 @@ defmodule Jarvis2.Scenarios.OutputWatcher do
           caller: pane
         )
 
-      Jarvis2.Bus.publish("scenario:output_watcher", %{
-        pane: pane,
-        dry_run: match?({:ok, %{dry_run: true}}, result)
-      })
+      Phoenix.PubSub.local_broadcast(
+        Jarvis2.PubSub,
+        "scenario:output_watcher",
+        {:jarvis2, "scenario:output_watcher",
+         %{
+           pane: pane,
+           dry_run: match?({:ok, %{dry_run: true}}, result)
+         }}
+      )
     end
 
     {:noreply, state}

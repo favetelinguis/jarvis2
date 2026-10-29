@@ -34,7 +34,7 @@ defmodule Jarvis2.Scenarios.Restore do
 
   @impl true
   def init(opts) do
-    Jarvis2.Bus.subscribe("mirror:updated")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "mirror:updated")
     dir = Keyword.get(opts, :state_dir, Application.fetch_env!(:jarvis2, :state_dir))
 
     path =

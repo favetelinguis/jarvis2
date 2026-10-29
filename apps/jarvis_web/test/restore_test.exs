@@ -116,16 +116,25 @@ defmodule Jarvis2.RestoreTest do
         ctx.view
       )
 
-    Jarvis2.Bus.publish("mcp:tool_call", %{caller: caller, tool: "whoami"})
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:tool_call",
+      {:jarvis2, "mcp:tool_call", %{caller: caller, tool: "whoami"}}
+    )
 
-    Jarvis2.Bus.publish("herdr:pane.agent_status_changed", %{
-      data: %{
-        "pane_id" => "w1:p1",
-        "workspace_id" => "w1",
-        "agent" => "pi",
-        "agent_status" => "working"
-      }
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_status_changed",
+      {:jarvis2, "herdr:pane.agent_status_changed",
+       %{
+         data: %{
+           "pane_id" => "w1:p1",
+           "workspace_id" => "w1",
+           "agent" => "pi",
+           "agent_status" => "working"
+         }
+       }}
+    )
 
     assert_receive {:write, %{"method" => "workspace.report_metadata"}}, 1_000
     assert_receive {:write, %{"method" => "pane.report_metadata"}}, 1_000
@@ -159,16 +168,25 @@ defmodule Jarvis2.RestoreTest do
         ctx.view
       )
 
-    Jarvis2.Bus.publish("mcp:tool_call", %{caller: caller, tool: "whoami"})
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "mcp:tool_call",
+      {:jarvis2, "mcp:tool_call", %{caller: caller, tool: "whoami"}}
+    )
 
-    Jarvis2.Bus.publish("herdr:pane.agent_status_changed", %{
-      data: %{
-        "pane_id" => "w1:p1",
-        "workspace_id" => "w1",
-        "agent" => "pi",
-        "agent_status" => "working"
-      }
-    })
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_status_changed",
+      {:jarvis2, "herdr:pane.agent_status_changed",
+       %{
+         data: %{
+           "pane_id" => "w1:p1",
+           "workspace_id" => "w1",
+           "agent" => "pi",
+           "agent_status" => "working"
+         }
+       }}
+    )
 
     assert_receive {:write, %{"method" => "workspace.report_metadata"}}, 1_000
     assert_receive {:write, %{"method" => "pane.report_metadata"}}, 1_000
@@ -338,7 +356,12 @@ defmodule Jarvis2.RestoreTest do
   end
 
   defp publish_fresh(ctx),
-    do: Jarvis2.Bus.publish("mirror:updated", %{source: ctx.mirror, view: %{stale: false}})
+    do:
+      Phoenix.PubSub.local_broadcast(
+        Jarvis2.PubSub,
+        "mirror:updated",
+        {:jarvis2, "mirror:updated", %{source: ctx.mirror, view: %{stale: false}}}
+      )
 
   defp replace_config(key, value) do
     old = Application.fetch_env(:jarvis2, key)

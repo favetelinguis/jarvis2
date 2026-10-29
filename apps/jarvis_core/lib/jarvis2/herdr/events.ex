@@ -15,7 +15,7 @@ defmodule Jarvis2.Herdr.Events do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    Jarvis2.Bus.subscribe("mirror:updated")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "mirror:updated")
 
     state = %{
       mirror: Keyword.get(opts, :mirror, Mirror),
@@ -74,7 +74,10 @@ defmodule Jarvis2.Herdr.Events do
       Logger.info("Herdr event source=socket type=#{inspect(name)} pane=#{inspect(pane)}")
 
       Jarvis2.State.record_event(event)
-      Jarvis2.Bus.publish("herdr:" <> name, event)
+
+      topic = "herdr:" <> name
+      Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, topic, {:jarvis2, topic, event})
+
       Mirror.invalidate(state.mirror)
       {:noreply, track_status(state, name, data)}
     else

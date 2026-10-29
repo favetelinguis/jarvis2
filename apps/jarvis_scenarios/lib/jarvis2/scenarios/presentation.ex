@@ -18,7 +18,7 @@ defmodule Jarvis2.Scenarios.Presentation do
   def init(opts) do
     for topic <-
           ~w(herdr:pane.agent_status_changed herdr:pane.agent_detected mcp:tool_call mcp:status_reported mirror:updated),
-        do: Jarvis2.Bus.subscribe(topic)
+        do: Phoenix.PubSub.subscribe(Jarvis2.PubSub, topic)
 
     {:ok,
      %{

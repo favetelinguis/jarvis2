@@ -51,7 +51,7 @@ defmodule Jarvis2.LayoutDiffTest do
       File.rm(path)
     end)
 
-    Jarvis2.Bus.subscribe("mirror:layout_diff")
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "mirror:layout_diff")
     Mirror.online(mirror, ["w1:p1"])
 
     assert_receive {:jarvis2, "mirror:layout_diff",
