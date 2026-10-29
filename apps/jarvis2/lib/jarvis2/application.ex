@@ -22,6 +22,21 @@ defmodule Jarvis2.Application do
 
     children = children ++ Jarvis2.MCP.child_specs() ++ [Jarvis2Web.Endpoint]
 
-    Supervisor.start_link(children, strategy: :rest_for_one, name: Jarvis2.Supervisor)
+    with {:ok, _} = started <-
+           Supervisor.start_link(children, strategy: :rest_for_one, name: Jarvis2.Supervisor) do
+      announce_login()
+      started
+    end
+  end
+
+  # Printed to stdout rather than logged so the single-use code stays out of log files.
+  defp announce_login do
+    endpoint = Application.get_env(:jarvis2, Jarvis2Web.Endpoint, [])
+
+    if endpoint[:server] do
+      port = get_in(endpoint, [:http, :port])
+      code = Jarvis2.LoginCodes.issue()
+      IO.puts("Jarvis2 UI: http://127.0.0.1:#{port}/login?code=#{code}  (single use, 10 minutes)")
+    end
   end
 end

@@ -1,0 +1,14 @@
+<header class="nav">
+  <strong>Jarvis2</strong>
+  <nav>
+    <.link navigate="/">Dashboard</.link>
+  </nav>
+  <.form for={%{}} action="/logout" method="delete" class="logout">
+    <button type="submit">Sign out</button>
+  </.form>
+</header>
+<main>
+  <p :if={msg = Phoenix.Flash.get(@flash, :error)} class="flash flash-error">{msg}</p>
+  <p :if={msg = Phoenix.Flash.get(@flash, :info)} class="flash">{msg}</p>
+  {@inner_content}
+</main>

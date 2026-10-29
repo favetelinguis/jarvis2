@@ -8,6 +8,7 @@ defmodule Jarvis2.Core do
         id: Jarvis2.MixRegistry
       ),
       Jarvis2.Token,
+      Jarvis2.LoginCodes,
       Jarvis2.Repo,
       {Ecto.Migrator, repos: Application.fetch_env!(:jarvis2, :ecto_repos)},
       Jarvis2.Journal.Pruner,

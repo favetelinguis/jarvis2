@@ -31,6 +31,9 @@ defmodule Jarvis2.MixProject do
     [
       {:herdr_client, in_umbrella: true},
       {:phoenix, "~> 1.8.16"},
+      {:phoenix_html, "~> 4.1"},
+      {:phoenix_live_view, "~> 1.2.0"},
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:phoenix_pubsub, "~> 2.1"},
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, "~> 0.26"},

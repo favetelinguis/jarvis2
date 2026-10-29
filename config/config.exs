@@ -10,6 +10,10 @@ config :jarvis2, Jarvis2Web.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   server: false,
   pubsub_server: Jarvis2.PubSub,
-  render_errors: [formats: [json: Jarvis2Web.ErrorJSON], layout: false]
+  live_view: [signing_salt: "jarvis2-live-view"],
+  render_errors: [
+    formats: [json: Jarvis2Web.ErrorJSON, html: Jarvis2Web.ErrorHTML],
+    layout: false
+  ]
 
 config :phoenix, :json_library, Jason

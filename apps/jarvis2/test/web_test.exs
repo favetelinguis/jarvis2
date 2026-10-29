@@ -17,7 +17,7 @@ defmodule Jarvis2.WebTest do
   test "request query strings are not logged" do
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        conn = Plug.Test.conn(:get, "/healthz?token=private-value")
+        conn = Plug.Test.conn(:get, "http://127.0.0.1/healthz?token=private-value")
         assert %{status: 200} = Jarvis2Web.Endpoint.call(conn, Jarvis2Web.Endpoint.init([]))
       end)
 

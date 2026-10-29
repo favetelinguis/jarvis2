@@ -205,7 +205,8 @@ defmodule Jarvis2.HerdrEventsTest do
     end)
 
     conn =
-      Plug.Test.conn(:get, "/status") |> Jarvis2Web.Endpoint.call(Jarvis2Web.Endpoint.init([]))
+      Plug.Test.conn(:get, "http://127.0.0.1/status")
+      |> Jarvis2Web.Endpoint.call(Jarvis2Web.Endpoint.init([]))
 
     assert conn.status == 200
     assert conn.resp_body =~ "1 agents · 1 blocked"
