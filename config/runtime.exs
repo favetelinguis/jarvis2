@@ -28,10 +28,25 @@ else
 
   state_dir = System.get_env("JARVIS2_STATE_DIR") || Path.expand("~/.local/state/jarvis2")
 
+  known_scenarios =
+    ~w(attention agent_prompt agent_spawn run_command test_loop declarative_layout sidebar_tokens pane_hygiene output_watcher custom_worker)
+
+  scenarios =
+    "JARVIS2_SCENARIOS"
+    |> System.get_env("")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.map(fn name ->
+      if name in known_scenarios,
+        do: String.to_atom(name),
+        else: raise("unknown JARVIS2_SCENARIOS entry #{inspect(name)}")
+    end)
+
   config :jarvis2,
     port: port,
     state_dir: state_dir,
     live: System.get_env("JARVIS2_LIVE") == "1",
+    live_scenarios: scenarios,
     allow_eval: System.get_env("JARVIS2_ALLOW_EVAL") == "1",
     mix_project_dir: File.cwd!()
 

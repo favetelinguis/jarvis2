@@ -7,7 +7,7 @@ defmodule Jarvis2Web.StatusController do
 
   def status(conn, _params) do
     view = Mirror.get(Application.get_env(:jarvis2, :mirror, Mirror))
-    calls = Jarvis2.Journal.count(source: :mcp)
+    calls = Jarvis2.Journal.count(source: :mcp, prefix: "tool.")
 
     summary =
       case view do

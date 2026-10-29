@@ -111,6 +111,11 @@ defmodule Jarvis2.PromptAgentTest do
     :ok = GenServer.call(ctx.mirror, {:put, without_optional})
     assert {:ok, %{"dry_run" => true}} = prompt(ctx, h, "gamma", "idle on older Herdr", false)
     refute_receive {:prompt_request, _}, 100
+
+    outcomes = for %{type: "fleet.prompt"} = event <- Jarvis2.Journal.recent(), do: event.outcome
+    assert :dry_run in outcomes
+    assert :refused in outcomes
+    refute inspect(Jarvis2.Journal.recent()) =~ "Review the test"
   end
 
   test "live mode still requires the agent_prompt scenario", ctx do

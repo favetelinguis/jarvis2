@@ -23,6 +23,15 @@ defmodule Jarvis2.Journal do
     case Repo.insert(Event.changeset(%Event{}, attrs)) do
       {:ok, event} ->
         Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, @topic, {:event, event})
+
+        if event.run_id,
+          do:
+            Phoenix.PubSub.local_broadcast(
+              Jarvis2.PubSub,
+              "run:" <> event.run_id,
+              {:event, event}
+            )
+
         {:ok, event}
 
       {:error, changeset} ->
@@ -86,6 +95,7 @@ defmodule Jarvis2.Journal do
       {:source, source}, query -> where(query, [e], e.source == ^source)
       {:type, type}, query -> where(query, [e], e.type == ^type)
       {:run_id, run_id}, query -> where(query, [e], e.run_id == ^run_id)
+      {:prefix, prefix}, query -> where(query, [e], like(e.type, ^(prefix <> "%")))
       _, query -> query
     end)
   end

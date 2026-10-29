@@ -261,7 +261,8 @@ defmodule Jarvis2.Herdr.Actions do
     end
   end
 
-  defp await_shell(pane, socket, deadline) do
+  @doc false
+  def await_shell(pane, socket, deadline) do
     result = Socket.request("pane.process_info", %{pane_id: pane}, server: socket, timeout: 1_000)
 
     ready =

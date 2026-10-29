@@ -1,6 +1,7 @@
 defmodule Jarvis2.MCP.Tools do
   @moduledoc false
   require Logger
+  alias Jarvis2.Fleet
   alias Jarvis2.Herdr.{Actions, Client, Mirror, Socket}
   alias Jarvis2.MCP.{Eval, EventWait, Identity, MixRunner}
 
@@ -175,7 +176,7 @@ defmodule Jarvis2.MCP.Tools do
     server = Application.get_env(:jarvis2, :herdr_socket, Socket)
     wait = value(args, :wait) || false
 
-    case Actions.prompt(caller, value(args, :agent), value(args, :text), wait, server: server) do
+    case Fleet.prompt(caller, value(args, :agent), value(args, :text), wait, server: server) do
       {:ok, result} ->
         {:ok, result}
 
@@ -188,7 +189,7 @@ defmodule Jarvis2.MCP.Tools do
   end
 
   def call("spawn_agent", args, caller) do
-    Actions.spawn_agent(caller, %{
+    Fleet.spawn_agent(caller, %{
       name: value(args, :name),
       kind: value(args, :kind),
       cwd: value(args, :cwd),
@@ -202,13 +203,13 @@ defmodule Jarvis2.MCP.Tools do
     do: EventWait.wait(value(args, :match), value(args, :timeout_s))
 
   def call("apply_layout", args, caller),
-    do: Jarvis2.Layouts.Dev.create(value(args, :name), caller)
+    do: Fleet.apply_layout(value(args, :name), caller)
 
   def call("run_mix", args, _caller), do: MixRunner.run(value(args, :task), value(args, :project))
   def call("elixir_eval", args, _caller), do: Eval.run(value(args, :code))
 
   def call("run_command", args, caller, progress) do
-    Actions.run_command(
+    Fleet.run_command(
       caller,
       %{
         command: value(args, :command),

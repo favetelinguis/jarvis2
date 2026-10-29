@@ -84,7 +84,7 @@ defmodule Jarvis2.Herdr.ExecutionGuard do
         :exit, _ -> nil
       end
 
-    with {:ok, verified} <- validate(caller, view),
+    with {:ok, verified} <- verify_caller(caller, view),
          :ok <- allow(state, mode, verified.pane) do
       key = {mode, verified.pane}
       lease = make_ref()
@@ -112,6 +112,14 @@ defmodule Jarvis2.Herdr.ExecutionGuard do
   end
 
   def handle_info(_, state), do: {:noreply, state}
+
+  # Jarvis2's own front ends (the UI, automations) act as a named system caller and have no pane to
+  # verify; every other caller must still be a detected agent.
+  defp verify_caller(%{system: name, pane: "system:" <> _} = caller, _view)
+       when is_binary(name) and name != "",
+       do: {:ok, caller}
+
+  defp verify_caller(caller, view), do: validate(caller, view)
 
   defp allow(state, mode, caller) do
     key = {mode, caller}
