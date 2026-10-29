@@ -10,10 +10,14 @@ defmodule Jarvis2.Questions do
   alias Jarvis2.Questions.Question
 
   @topic "questions"
+  @inbox_topic "inbox"
   @default_ttl_minutes 60
   @max_pending_per_run 5
 
   def topic, do: @topic
+
+  @doc "Topic with a bare `:inbox_changed` message, for views that only show the pending count."
+  def inbox_topic, do: @inbox_topic
 
   @doc "Creates a pending question for the run, or `{:error, :too_many}` when it has too many open."
   def ask(run_id, attrs) do
@@ -187,6 +191,8 @@ defmodule Jarvis2.Questions do
     for topic <- [@topic, "run:" <> question.run_id, "question:" <> question.id] do
       Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, topic, {:question, question})
     end
+
+    Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, @inbox_topic, :inbox_changed)
   end
 
   defp record(question, type) do

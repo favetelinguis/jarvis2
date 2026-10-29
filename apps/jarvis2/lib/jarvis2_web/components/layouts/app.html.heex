@@ -3,6 +3,10 @@
   <nav>
     <.link navigate="/">Dashboard</.link>
     <.link navigate="/runs">Runs</.link>
+    <.link navigate="/inbox">
+      Inbox
+      <span :if={@inbox_count > 0} id="inbox-count" class="badge badge-blocked">{@inbox_count}</span>
+    </.link>
   </nav>
   <.form for={%{}} action="/logout" method="delete" class="logout">
     <button type="submit">Sign out</button>

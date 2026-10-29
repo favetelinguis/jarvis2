@@ -1,7 +1,7 @@
 defmodule Jarvis2Web.LoginController do
   use Jarvis2Web, :controller
 
-  plug(:put_view, html: Jarvis2Web.LoginHTML)
+  plug :put_view, html: Jarvis2Web.LoginHTML
 
   # The URL printed at boot carries a single-use code; pasting the API token is the fallback.
   def new(conn, %{"code" => code}) when is_binary(code), do: sign_in(conn, code)

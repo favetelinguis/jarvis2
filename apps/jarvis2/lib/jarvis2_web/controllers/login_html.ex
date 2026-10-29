@@ -1,7 +1,7 @@
 defmodule Jarvis2Web.LoginHTML do
   use Jarvis2Web, :html
 
-  attr(:error, :string, default: nil)
+  attr :error, :string, default: nil
 
   def new(assigns) do
     ~H"""

@@ -1,7 +1,7 @@
 defmodule Jarvis2Web.RunLive.Show do
   use Jarvis2Web, :live_view
 
-  alias Jarvis2.{Journal, Runs}
+  alias Jarvis2.{Journal, Questions, Runs}
   alias Jarvis2.Runs.{Run, Tail}
 
   @event_limit 200
@@ -25,6 +25,7 @@ defmodule Jarvis2Web.RunLive.Show do
          |> assign(:run, run)
          |> assign(:live?, Runs.Launcher.mode() == :live)
          |> assign(:tail, nil)
+         |> assign(:questions, Questions.list_for_run(run.id))
          |> assign(:prompt_form, to_form(%{"text" => ""}, as: :prompt))
          |> stream(:events, events)
          |> watch_tail()}
@@ -44,6 +45,9 @@ defmodule Jarvis2Web.RunLive.Show do
         {:noreply, put_flash(socket, :error, message)}
     end
   end
+
+  def handle_event("answer", params, socket),
+    do: {:noreply, Jarvis2Web.QuestionActions.answer(socket, params)}
 
   def handle_event("stop", _params, socket) do
     case Runs.stop_run(socket.assigns.run) do
@@ -68,6 +72,9 @@ defmodule Jarvis2Web.RunLive.Show do
     do: {:noreply, stream_insert(socket, :events, event, at: 0, limit: @event_limit)}
 
   def handle_info({:tail, text}, socket), do: {:noreply, assign(socket, :tail, text)}
+
+  def handle_info({:question, _question}, socket),
+    do: {:noreply, assign(socket, :questions, Questions.list_for_run(socket.assigns.run.id))}
 
   defp watch_tail(socket) do
     run = socket.assigns.run
@@ -99,6 +106,11 @@ defmodule Jarvis2Web.RunLive.Show do
         Stop
       </button>
     </p>
+
+    <section :if={@questions != []} id="questions">
+      <h2>Waiting for you</h2>
+      <.question_card :for={question <- @questions} question={question} />
+    </section>
 
     <section :if={Run.active?(@run) and @run.pane_id} id="prompt">
       <h2>Prompt</h2>
