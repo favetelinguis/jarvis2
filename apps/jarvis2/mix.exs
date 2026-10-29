@@ -26,6 +26,7 @@ defmodule Jarvis2.MixProject do
   defp deps do
     [
       {:herdr_client, in_umbrella: true},
+      {:phoenix, "~> 1.8.16"},
       {:phoenix_pubsub, "~> 2.1"},
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, "~> 0.26"},

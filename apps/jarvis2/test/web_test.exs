@@ -3,7 +3,7 @@ defmodule Jarvis2.WebTest do
 
   setup_all do
     start_supervised!({Finch, name: Jarvis2.TestFinch})
-    {:ok, server} = Bandit.start_link(plug: Jarvis2.Web.Router, ip: {127, 0, 0, 1}, port: 0)
+    {:ok, server} = Bandit.start_link(plug: Jarvis2Web.Endpoint, ip: {127, 0, 0, 1}, port: 0)
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
     %{port: port, token: Jarvis2.Token.get()}
   end
@@ -12,6 +12,16 @@ defmodule Jarvis2.WebTest do
     assert {200, %{"status" => "ok"}} = request(port, :get, "/healthz")
     assert {200, status} = request(port, :get, "/status")
     assert is_binary(status)
+  end
+
+  test "request query strings are not logged" do
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        conn = Plug.Test.conn(:get, "/healthz?token=private-value")
+        assert %{status: 200} = Jarvis2Web.Endpoint.call(conn, Jarvis2Web.Endpoint.init([]))
+      end)
+
+    refute log =~ "private-value"
   end
 
   test "removed endpoints return not found", %{port: port, token: token} do

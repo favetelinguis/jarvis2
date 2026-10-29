@@ -64,7 +64,7 @@ defmodule Jarvis2.MCPTest do
     start_supervised!({Finch, name: Jarvis2.MCPTestFinch})
 
     {:ok, server} =
-      start_supervised({Bandit, plug: Jarvis2.Web.Router, ip: {127, 0, 0, 1}, port: 0})
+      start_supervised({Bandit, plug: Jarvis2Web.Endpoint, ip: {127, 0, 0, 1}, port: 0})
 
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
     %{port: port, token: Jarvis2.Token.get(), mirror: mirror}

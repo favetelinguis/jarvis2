@@ -204,7 +204,9 @@ defmodule Jarvis2.HerdrEventsTest do
         else: Application.delete_env(:jarvis2, :mirror)
     end)
 
-    conn = Plug.Test.conn(:get, "/status") |> Jarvis2.Web.Router.call(Jarvis2.Web.Router.init([]))
+    conn =
+      Plug.Test.conn(:get, "/status") |> Jarvis2Web.Endpoint.call(Jarvis2Web.Endpoint.init([]))
+
     assert conn.status == 200
     assert conn.resp_body =~ "1 agents · 1 blocked"
   end

@@ -83,7 +83,7 @@ defmodule Jarvis2.ExecutionTest do
     config(:live, false)
     config(:live_scenarios, [])
     start_supervised!({Finch, name: Jarvis2.ExecutionTestFinch})
-    server = start_supervised!({Bandit, plug: Jarvis2.Web.Router, ip: {127, 0, 0, 1}, port: 0})
+    server = start_supervised!({Bandit, plug: Jarvis2Web.Endpoint, ip: {127, 0, 0, 1}, port: 0})
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
     %{port: port, token: Jarvis2.Token.get(), fixture: fixture, mirror: mirror, view: view}
   end
