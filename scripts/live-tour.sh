@@ -1,27 +1,42 @@
 #!/bin/bash
-# Scripted tour of the live workflows against an isolated Herdr session and a mock model.
-# Requires HERDR_ENV=1, herdr, pi, git, curl, python3 and mise/mix. It never touches the
-# default Herdr session or your Pi configuration. Results are
-# summarised as PASS/FAIL lines; the app log is kept in the printed temp dir on failure.
+# Scripted tour of the live workflows against an isolated Herdr session.
+#
+#   scripts/live-tour.sh              mock model: automated PASS/FAIL checks, safe for CI-style use.
+#   MODEL=luna scripts/live-tour.sh   showcase: starts Jarvis2 against an isolated Herdr session and
+#                                     leaves it running so you can start a real openrouter/openai/gpt-6-luna
+#                                     run from the browser. Uses your real Pi configuration and credits.
+#
+# Requires HERDR_ENV=1, herdr, pi, git, curl, python3 and mise/mix. The mock mode never touches the
+# default Herdr session or your Pi configuration. Results are summarised as PASS/FAIL lines; the app
+# log is kept in the printed temp dir on failure.
 set -u
 [ "${HERDR_ENV:-}" = 1 ] || { echo "HERDR_ENV=1 is required" >&2; exit 2; }
 root=$(cd "$(dirname "$0")/.." && pwd)
 d=$(mktemp -d /tmp/jarvis2-tour.XXXXXX)
 n="jarvis2-tour-${d##*.}"
 free_port(){ python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
+luna=0; [ "${MODEL:-mock}" = luna ] && luna=1
 mp=$(free_port); jp=$(free_port)
-fail=0
+[ "$luna" = 1 ] && jp=${JARVIS2_PORT:-4747}   # your Pi MCP config points at this port
+fail=0; mock=; app=; server=
 check(){ if grep -q -- "$2" "$d/app.log"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 
 export XDG_CONFIG_HOME="$d/config" XDG_DATA_HOME="$d/data" HERDR_CONFIG_PATH="$d/config/herdr/config.toml" \
-  ZDOTDIR="$d/home" PI_CODING_AGENT_DIR="$d/pi" PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1
+  ZDOTDIR="$d/home"
 mkdir -p "$d/config/herdr" "$d/home" "$d/pi" "$d/repo" "$d/state"; touch "$d/home/.zshrc"
 printf 'onboarding = false\n' > "$HERDR_CONFIG_PATH"
-printf '{"providers":{"mock":{"baseUrl":"http://127.0.0.1:%s/v1","api":"openai-completions","apiKey":"x","models":[{"id":"mock"}]}}}\n' "$mp" > "$d/pi/models.json"
-printf '{"defaultProvider":"mock","defaultModel":"mock","quietStartup":true}\n' > "$d/pi/settings.json"
 unset HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
-
-python3 "$root/scripts/mock_model.py" "$mp" "$d/requests.log" & mock=$!
+if [ "$luna" = 1 ]; then
+  pi auth check --provider openrouter --model openai/gpt-6-luna --no-refresh >/dev/null 2>&1 \
+    || { echo "Pi has no OpenRouter credentials (set OPENROUTER_API_KEY or log in with pi)" >&2; exit 2; }
+  grep -qs jarvis2 "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/mcp.json" \
+    || echo "note: add the jarvis2 server from .pi/mcp.json to ${PI_CODING_AGENT_DIR:-~/.pi/agent}/mcp.json so agents can call its tools" >&2
+else
+  export PI_CODING_AGENT_DIR="$d/pi" PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1
+  printf '{"providers":{"mock":{"baseUrl":"http://127.0.0.1:%s/v1","api":"openai-completions","apiKey":"x","models":[{"id":"mock"}]}}}\n' "$mp" > "$d/pi/models.json"
+  printf '{"defaultProvider":"mock","defaultModel":"mock","quietStartup":true}\n' > "$d/pi/settings.json"
+  python3 "$root/scripts/mock_model.py" "$mp" "$d/requests.log" & mock=$!
+fi
 (cd "$d/repo" && git init -q -b main && mkdir test && printf 'defmodule T.MixProject do\n  use Mix.Project\n  def project, do: [app: :t, version: "0.1.0"]\nend\n' > mix.exs \
   && printf 'ExUnit.start()\n' > test/test_helper.exs \
   && printf 'defmodule XTest do\n  use ExUnit.Case\n  test "fails", do: assert(1 == 2)\nend\n' > test/x_test.exs \
@@ -35,6 +50,18 @@ pane=$(herdr --session "$n" workspace create --cwd "$d/repo" --no-focus | python
 sock=$(herdr session list --json | python3 -c 'import json,sys;print(next(s["socket_path"] for s in json.load(sys.stdin)["sessions"] if s["name"]==sys.argv[1]))' "$n")
 
 cd "$root"
+if [ "$luna" = 1 ]; then
+  HERDR_SOCKET_PATH="$sock" HERDR_PANE_ID="$pane" JARVIS2_LIVE=1 JARVIS2_PORT=$jp JARVIS2_STATE_DIR="$d/state" \
+    mix run --no-halt -e 'Jarvis2.Settings.update(%{scenarios: ["agent_spawn", "agent_prompt"]})' >"$d/app.log" 2>&1 & app=$!
+  for _ in $(seq 1 200); do curl -s -o /dev/null "http://127.0.0.1:$jp/healthz" && break; sleep .2; done
+  echo "Isolated Herdr session: $n   (watch it with: herdr session attach $n)"
+  grep -a 'Jarvis2 UI' "$d/app.log" || { echo "Jarvis2 did not start; see $d/app.log" >&2; fail=1; exit 1; }
+  echo "Open the link above, choose New run (defaults: pi, openrouter/openai/gpt-6-luna, thinking low)."
+  echo 'Suggested task: Ask me which file to change, then ask for approval before editing.'
+  echo "Press Enter here to stop and clean up."
+  read -r _
+  exit 0
+fi
 HERDR_SOCKET_PATH="$sock" JARVIS2_LIVE=1 JARVIS2_PORT=$jp JARVIS2_STATE_DIR="$d/state" \
   mix run --no-halt -e "Application.put_env(:jarvis2, :live_scenarios, [:run_command, :agent_prompt, :test_loop, :attention]); Application.put_env(:jarvis2, :test_loop_roots, [\"$d\"])" >"$d/app.log" 2>&1 & app=$!
 for _ in $(seq 1 200); do curl -s -o /dev/null "http://127.0.0.1:$jp/healthz" && break; sleep .2; done

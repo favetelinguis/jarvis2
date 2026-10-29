@@ -7,7 +7,7 @@
         "X-Herdr-Pane": "${HERDR_PANE_ID}",
         "X-Herdr-Workspace": "${HERDR_WORKSPACE_ID}"
       },
-      "description": "Elixir-side Herdr control plane: identity, blackboard, agent discovery, layouts, events, notifications and an allow-listed Mix runner.",
+      "description": "Jarvis2 control plane: identity, blackboard, agent discovery, layouts, events, guarded prompts and spawning, human questions and approvals, and an allow-listed Mix runner.",
       "exposure": "codemode",
       "toolExposure": {
         "whoami": "direct",

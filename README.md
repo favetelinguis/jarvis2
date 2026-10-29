@@ -1,39 +1,148 @@
 # Jarvis2
 
-An Elixir control plane for Herdr.
+A Phoenix / LiveView control plane for [Herdr](https://herdr.dev). From the browser you can watch the
+live Herdr session, start a Pi agent in a new pane, steer it, and answer the questions and approvals it
+raises through MCP. Everything that matters is stored in SQLite, so a restart loses nothing but the
+in-memory Herdr mirror.
 
-## Current scope
-
-The app runs a loopback HTTP server with `/healthz`, `/status`, and an authenticated MCP endpoint. It subscribes to Herdr socket events, refreshes an in-memory session mirror, and keeps a bounded event history.
-
-`jarvis2://layout` includes the latest net layout diff: membership, focus, geometry, split ratios, agent state, and worktree-change counts. Diffs are limited to 64 changes, flag truncation, and report `resynced` after a subscription gap or `unavailable` for invalid or oversized projections. Projection limits are 2,048 entities per list and 4,096 nested geometry/split entries or worktrees. Diffs compare sampled fresh snapshots, not every intermediate event; sequences reset on restart. Check the resource's `stale` flag before relying on its latest diff. Diff entries omit label values and checkout paths, although the full layout resource still contains them.
-
-The authenticated streamable HTTP MCP endpoint provides identity, logging, blackboard, agent and layout discovery, worktrees, status reporting, notifications, guarded prompts, agent spawning, command execution, event waits, and `apply_layout`. `run_mix` executes an allow-listed Mix task. Browser-origin requests to `/mcp` are rejected.
-
-From the repository root, run `mix deps.get`, then start with `mix run --no-halt` or `iex --sname jarvis2 -S mix`. The default port is `4747`; set `JARVIS2_PORT` to override it. A bearer token is created at `$JARVIS2_STATE_DIR/token`, defaulting to `~/.local/state/jarvis2/token`, with mode `0600`. Upgrading from the old state directory generates a new token; restart clients with the updated token path.
-
-For example:
+## Quick start
 
 ```sh
-curl http://127.0.0.1:4747/healthz
+mix deps.get
+mix run --no-halt          # or: iex --sname jarvis2 -S mix
 ```
 
-Herdr writes default to dry-run. Live requests require both `JARVIS2_LIVE=1` and the corresponding scenario in `:live_scenarios` in `config/config.exs`. The developer layout uses `:declarative_layout`; it creates a **new** tab with three labelled shells, exports it, and adjusts its root split if unchanged. Export and resize are not atomic; inspect state before retrying an uncertain creation or resize. Live `prompt_agent` requires `:agent_prompt`; `spawn_agent` and `run_command` require `:agent_spawn` and `:run_command`. The generic mutation interface refuses raw agent starts and pane/agent input.
+Migrations run at boot. The server prints a single-use sign-in link:
 
-`:sidebar_tokens` enables `report_status`'s `$jarvis` pane token, the `$agent_state` pane token on agent transitions, and the `$last_tool` Space token on MCP calls. Tokens expire after 60 seconds. Reports and queued updates require a fresh mirror; updates are coalesced and best-effort. `:pane_hygiene` independently enables renaming detected agent panes to `kind` or `kind: summary` and, when known, their tab to the linked worktree branch. It can overwrite manual labels. Status summaries appear in Herdr when live, so do not include secrets. See `examples/herdr-config.snippet.toml` for sidebar rows.
+```
+Jarvis2 UI: http://127.0.0.1:4747/login?code=…  (single use, 10 minutes)
+```
 
-Live token state is saved best-effort to `restore.json` in the state directory (mode `0600`). It can include status summaries. After an app restart, Jarvis2 restores only when the socket path, device, inode, and change time still match and the pane, terminal, and agent identity still match; the corresponding live scenario must still be enabled. This fingerprint is a best-effort identity check, not authentication. Remaining token TTL is not extended. Expired values are removed while the app runs or when that session's state is next loaded; if the app is stopped or the Herdr session changes, the file can retain them until replaced or removed. Do not use a shared state directory for concurrent app instances.
+Open it in your browser. The code is printed to stdout rather than logged. If it expires, restart, or
+paste the long-lived token from `$JARVIS2_STATE_DIR/token` (default `~/.local/state/jarvis2/token`) on
+the login page. Run it inside a Herdr pane (or keep a pane focused) so new runs have somewhere to split from.
 
-`prompt_agent` requires a fresh mirror and a detected caller, targets only a ready agent in the same workspace, refuses self-prompts, and limits each caller to four attempts per minute. A process-local, bounded graph rejects cycles in prompts routed through Jarvis2 until the app restarts; it deliberately disallows even later reciprocal handoffs. Prompts to a target are serialized with a cooldown, and uncertain failures are not retried. `wait=true` has a 60-second Herdr deadline. These are PoC safeguards, not a security boundary: pane headers are advisory, graph/rate state is not shared across app instances or retained on restart, and Herdr does not provide an atomic expected-occupant precondition. A target may change between snapshot validation and submission. A disposable Herdr session verified prompting a real Pi agent using a local mock model.
+| Variable | Meaning |
+|---|---|
+| `JARVIS2_PORT` | HTTP port on `127.0.0.1` (default `4747`) |
+| `JARVIS2_STATE_DIR` | token, cookie secret and `jarvis2.db` (default `~/.local/state/jarvis2`) |
+| `JARVIS2_LIVE=1` | allow real Herdr changes; without it every action is a recorded dry-run |
+| `JARVIS2_SCENARIOS` | optional comma-separated lock-down of the actions that may ever be enabled |
 
-`spawn_agent` and `run_command` create a sibling pane in the caller's current directory; they require a fresh recognized caller, recheck the created terminal and its exclusive foreground shell, limit each caller to four attempts per minute, and serialize operations per caller. A partial or uncertain result has a 60-second cooldown; inspect the workspace before retrying. These checks are process-local and cannot prevent races with other Herdr clients. Agent startup is asynchronous at the socket API, so readiness is checked separately. Optional spawn prompts also require `:agent_prompt`. `run_command` sends a single shell line to the new pane; it is **not sandboxed**, and an output match can match the echoed command rather than completed output. Progress notifications require a connected MCP event stream. Neither command nor prompt text is logged by the execution guard, but both are visible in the destination terminal.
+A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bin/jarvis2 start`.
 
-`run_mix` is limited to the project directory where the server started and one task at a time. It requires GNU `timeout` and can execute that project's code even in dry-run mode; it is **not a sandbox**. With `:custom_worker` enabled, it also reports a `jarvis2-mix` agent on the server's own pane, from working to idle on success or blocked on failure. Herdr records idle as a completion. Reporting is best-effort: it checks that the server VM is in the pane's foreground process group and does not overwrite a different detected agent, but checks and writes cannot be atomic. A failed or uncertain report is not retried, and the Mix job still runs; inspect the server pane if its displayed status is stale. The agent persists in that pane until released or the pane closes. `elixir_eval` is off unless `JARVIS2_ALLOW_EVAL=1` is set at startup, and remains hidden in the supplied Pi configuration. When enabled it executes arbitrary code in the server VM: its timeout does not isolate side effects or child processes.
+## The showcase: a Pi agent on `openrouter/openai/gpt-6-luna`
 
-**Test loop** (`:test_loop` plus `:run_command` and `:agent_prompt`): when an agent in a Mix project under `:test_loop_roots` (default the server's project directory) finishes a turn, runs `mix test` in a sibling pane. On failure it prompts that agent with a sanitized output tail, up to three consecutive failures per pane and at least 20 seconds apart. This runs project code, is not sandboxed, and the output tail may contain secrets printed by tests. The pane read can include the echoed command and shell prompt.
+1. Start with `JARVIS2_LIVE=1 mix run --no-halt` and sign in.
+2. **Settings**: enable `agent_spawn` and `agent_prompt` (live actions are off until you do).
+3. **New run**: the form is prefilled with agent `pi`, model `openrouter/openai/gpt-6-luna`, thinking `low`.
+   Give it a task, for example *Ask me which file to change, then ask for approval before editing*.
+4. Jarvis2 splits a pane next to the anchor pane, starts Pi there with
+   `--provider openrouter --model openai/gpt-6-luna --thinking low`, and delivers the task. The run page
+   shows status, the terminal tail and a live timeline. The agent's questions appear as cards on the run
+   page and in the **Inbox**; answering unblocks it. `submit_result` finishes the run.
 
-Herdr serves one request per connection and resets concurrent ones that share it, so Jarvis2 opens a connection per request.
+Without `JARVIS2_LIVE=1` the same flow is a dry-run: the run is recorded and the planned Herdr calls are
+shown in its timeline, but nothing is started. `MODEL=luna scripts/live-tour.sh` sets up an isolated Herdr
+session for a manual showcase (it uses your real Pi configuration and OpenRouter credits).
 
-The supplied `.pi/mcp.json` applies only after Pi project trust is granted. It assumes the default port and token path; adjust it if `JARVIS2_PORT` or `JARVIS2_STATE_DIR` differs. Pi discovery and `whoami`/`log` calls from an isolated Herdr pane were tested with temporary Pi configuration and one-run trust approval; your project trust has not been changed. Agent identity is advisory and becomes `unknown` when the mirror is stale or the pane cannot be resolved.
+For an agent to call Jarvis2's tools, Pi needs the `jarvis2` MCP server. The repository's `.pi/mcp.json`
+(used after Pi project trust) sends `Bearer ${JARVIS2_RUN_TOKEN:-<file token>}`: runs get their own token
+in the pane environment. For runs started in other directories, add the same `jarvis2` entry to
+`~/.pi/agent/mcp.json`.
 
-From the repository root, run `mix test`, `mix format --check-formatted`, and `mix credo` to check the project. Tests live under `apps/*/test`, with end-to-end tests in `apps/jarvis2/test`. Credo currently reports existing code-quality findings.
+## Screens
+
+| Route | Purpose |
+|---|---|
+| `/` | Dashboard: connection, live/dry badge, workspace → tab → pane tree, agents, worktrees, layout diff, recent events, *Apply dev layout* |
+| `/runs`, `/runs/new`, `/runs/:id` | Runs with status filter; start form; run page with questions, prompt box, terminal tail, timeline, stop; Mix jobs |
+| `/inbox` | Every pending question and approval, with a count badge in the navigation |
+| `/blackboard` | Notes shared between agents and you (JSON values) |
+| `/events` | The journal, filterable by source, type prefix and run |
+| `/settings` | Which actions are enabled, defaults for new runs, run-token management |
+
+Every page except `/login`, `/healthz`, `/status` and `/mcp` needs a session.
+
+## MCP tools
+
+The MCP endpoint (`/mcp`, streamable HTTP) accepts the file token or a per-run token. Every tool has a
+UI surface or is agent-only:
+
+| Tool | Where you see it |
+|---|---|
+| `whoami`, `log`, `wait_for_event`, `notify_human` | agent-only (calls appear in `/events`) |
+| `blackboard_put/get/list` | `/blackboard` |
+| `list_agents`, `get_layout`, `list_worktrees` | `/` |
+| `report_status` | run status and timeline; sidebar token when `sidebar_tokens` is enabled |
+| `read_agent` | run terminal tail |
+| `prompt_agent`, `spawn_agent`, `run_command` | `fleet.*` rows in `/events` |
+| `apply_layout` | *Apply dev layout* on `/` |
+| `run_mix` | a run of kind `mix` on `/runs` |
+| `ask_human`, `request_approval`, `wait_for_answer` | run page and `/inbox` (run tokens only) |
+| `submit_result` | run page *Result* (run tokens only) |
+
+Resources: `jarvis2://session`, `layout` and `worktrees` (dashboard), `events/recent` and `journal`
+(`/events`), `blackboard` (`/blackboard`). `jarvis2://layout` includes the net layout diff (membership,
+focus, geometry, split ratios, agent state; limited to 64 changes, `resynced` after a subscription gap,
+`unavailable` when invalid or oversized). Browser-origin requests to `/mcp` are rejected.
+
+`ask_human` and `request_approval` return a ticket immediately; the agent polls `wait_for_answer(ticket,
+timeout_s ≤ 100)` until it is no longer `pending`. Questions expire after an hour and are cancelled when
+the run ends; a run may have five open at a time.
+
+## Safety model
+
+- **Dry-run by default.** Real Herdr changes need `JARVIS2_LIVE=1` *and* the action enabled in Settings
+  (`JARVIS2_SCENARIOS` can restrict what may be enabled). The environment is the ceiling; the database can
+  only narrow it.
+- **Loopback only.** Bound to `127.0.0.1`; requests with a non-loopback `Host` are refused (DNS rebinding);
+  the LiveView socket checks origin; `/mcp` refuses browser origins. Sign-in uses single-use codes and a
+  signed session cookie.
+- **Real MCP identity.** A run token resolves to its run, and the run's recorded pane/terminal gives its Herdr
+  identity. Tokens are SHA-256 hashed at rest, expire after 24 h, and are revoked when the run stops, fails,
+  is lost or submits its result. The `X-Herdr-*` headers are only a cross-check: a mismatch refuses write tools.
+  The long-lived file token still works for agents that are not runs but cannot use the run-only tools.
+- **Same guards for UI and MCP.** UI actions act as the system caller `ui` through the execution and prompt
+  guards and are audited as `fleet.*` events; they skip only the "caller must be a detected agent" check.
+- **Redaction.** Prompt, command and summary text, blackboard values and matched output lines are never stored in
+  the journal (only their sizes); credential-looking keys and bearer strings are masked. A run's own
+  `report_status` summaries are the exception, because you started that run.
+
+Existing PoC safeguards remain: `prompt_agent` needs a fresh mirror and a detected caller, targets only a ready
+agent in the same workspace, refuses self-prompts and cycles, and allows four attempts a minute per caller;
+`spawn_agent` and `run_command` create a sibling pane in the caller's directory, recheck the new terminal and
+serialise per caller. These are process-local limits, not a security boundary: pane headers are advisory, state
+is not shared between instances, and Herdr offers no atomic expected-occupant check. `run_command` sends one
+shell line to the new pane and is **not sandboxed**. `run_mix` runs an allow-listed task (`test`, `compile`,
+`format --check-formatted`) in the project where the server started; it executes that project's code, even in
+dry-run, and needs GNU `timeout`. Herdr serves one request per connection, so Jarvis2 opens one per request.
+
+## Automations
+
+Enabled from Settings, each records `automation.*` rows in the journal:
+
+- `attention`: notification and window title when an agent becomes blocked or done.
+- `test_loop` (with `run_command` and `agent_prompt`): when an agent in a Mix project under `:test_loop_roots`
+  (default: the server's project) finishes a turn, runs `mix test` in a sibling pane and prompts the agent with
+  a sanitised tail on failure (three failures per pane, 20 s apart). Runs project code; the tail may contain
+  secrets printed by tests.
+- `output_watcher`: notification when watched pane output matches.
+- `sidebar_tokens` / `pane_hygiene`: `$jarvis`, `$agent_state` and `$last_tool` sidebar tokens (60 s TTL) and
+  pane/tab renaming, which can overwrite manual labels; see `examples/herdr-config.snippet.toml`.
+- `custom_worker`: shows a running `run_mix` job as a `jarvis2-mix` agent on the server's own pane.
+- `declarative_layout`: the *dev* layout, a **new** tab with three labelled shells.
+
+## Development
+
+```sh
+mix test                     # umbrella: herdr_client + jarvis2
+mix format --check-formatted
+mix compile --warnings-as-errors
+mix credo                    # reports existing findings in the guarded-execution code
+scripts/live-tour.sh         # end-to-end check against an isolated Herdr session and a mock model
+```
+
+Layout: `apps/herdr_client` (socket client and a fake Herdr for tests) and `apps/jarvis2` (contexts under
+`lib/jarvis2`, web under `lib/jarvis2_web`). Contexts own the logic; LiveViews and MCP tools are thin
+front-ends over them. See `plan.md` for the design and decisions.
