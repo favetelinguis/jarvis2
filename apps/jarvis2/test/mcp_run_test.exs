@@ -116,7 +116,9 @@ defmodule Jarvis2.MCPRunTest do
           {"ask_human", %{prompt: "x"}},
           {"request_approval", %{action: "x"}},
           {"wait_for_answer", %{ticket: "x"}},
-          {"submit_result", %{summary: "x"}}
+          {"submit_result", %{summary: "x"}},
+          {"ask_questions", %{questions: [%{title: "x", body: "x", recommended: "x"}]}},
+          {"submit_plan", %{plan: "x"}}
         ] do
       assert {:error, "no run for this pane"} = call_error(ctx, session, tool, args)
     end
@@ -211,6 +213,34 @@ defmodule Jarvis2.MCPRunTest do
            )
 
     refute inspect(Journal.recent()) =~ "journal me"
+  end
+
+  test "kanban tools validate input and keep interview text out of the journal", ctx do
+    session = start_session(ctx, ctx.pane)
+
+    question = %{
+      title: "secret title",
+      body: "secret body",
+      recommended: "secret recommendation",
+      options: ["secret option"]
+    }
+
+    assert {:error, "Not a kanban run."} =
+             call_error(ctx, session, "ask_questions", %{questions: [question]})
+
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Board", cwd: File.cwd!()})
+    card |> Ecto.Changeset.change(column: :agent, run_id: ctx.run.id) |> Repo.update!()
+
+    assert {:error, _} =
+             call_error(ctx, session, "ask_questions", %{questions: List.duplicate(question, 9)})
+
+    assert %{"round" => 1, "status" => "awaiting_user"} =
+             call(ctx, session, "ask_questions", %{questions: [question]})
+
+    assert {:error, _} = call_error(ctx, session, "ask_questions", %{questions: [question]})
+    assert %{"status" => "done"} = call(ctx, session, "submit_plan", %{plan: "secret final plan"})
+    assert Jarvis2.Kanban.get_card(card.id).column == :done
+    refute inspect(Journal.recent()) =~ "secret"
   end
 
   # --- helpers

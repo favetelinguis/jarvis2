@@ -55,6 +55,7 @@ repository's `.pi/mcp.json` after project trust, or add its `jarvis2` entry to `
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `/`                               | Dashboard: connection, workspace → tab → pane tree, agents, worktrees, layout diff, recent events, _Apply dev layout_ |
 | `/runs`, `/runs/new`, `/runs/:id` | Runs with status filter; start form; run page with questions, prompt box, timeline, stop; Mix jobs                     |
+| `/kanban`                         | Planning board: start an interview, answer rounds, read and reopen plans |
 | `/inbox`                          | Every pending question and approval, with a count badge in the navigation                                                             |
 | `/blackboard`                     | Notes shared between agents and you (JSON values)                                                                                     |
 | `/events`                         | The journal, filterable by source, type prefix and run                                                                                |
@@ -80,6 +81,7 @@ or is agent-only:
 | `run_mix`                                          | a run of kind `mix` on `/runs`                                          |
 | `ask_human`, `request_approval`, `wait_for_answer` | run page and `/inbox` (run pane only)                                 |
 | `submit_result`                                    | run page _Result_ (run pane only)                                     |
+| `ask_questions`, `submit_plan`                    | kanban card (kanban run pane only)                                    |
 
 Resources: `jarvis2://session`, `layout` and `worktrees` (dashboard), `events/recent` and `journal`
 (`/events`), `blackboard` (`/blackboard`). `jarvis2://layout` includes the net layout diff (membership,
@@ -100,6 +102,7 @@ result submission or when the run stops, fails or is lost; a run may have five o
   signed session cookie.
 - **MCP identity is unauthenticated.** `X-Herdr-Pane` selects an active run, including one that has
   submitted a result. Any local process can claim another pane and call MCP tools or answer for its run.
+  This also permits asking kanban questions or submitting a plan for that pane's card.
   A fresh mirror checks the recorded terminal against the pane. Loopback binding, Host and Origin checks,
   scenario gates, execution/prompt guards and rate limits remain in place.
 - **Guarded UI and MCP.** UI run actions act as the system caller `ui` through the execution and prompt
@@ -145,4 +148,4 @@ scripts/live-tour.sh         # end-to-end check against an isolated Herdr sessio
 
 Layout: `apps/herdr_client` (socket client and a fake Herdr for tests) and `apps/jarvis2` (contexts under
 `lib/jarvis2`, web under `lib/jarvis2_web`). Contexts own the logic; LiveViews and MCP tools are thin
-front-ends over them. See `plan.md` for the design and decisions.
+front-ends over them.

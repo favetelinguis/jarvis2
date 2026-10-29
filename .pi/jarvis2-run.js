@@ -14,6 +14,8 @@ export default function (pi) {
       request_approval: "direct",
       wait_for_answer: "direct",
       submit_result: "direct",
+      ask_questions: "direct",
+      submit_plan: "direct",
     },
     timeout: 120,
   });

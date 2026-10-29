@@ -82,22 +82,28 @@ defmodule Jarvis2.Runs do
   end
 
   @doc "Runs the launch sequence for a `:starting` run and records the outcome."
-  def launch(%Run{status: :starting} = run) do
+  def launch(run, on_prompt \\ fn _ -> :ok end)
+
+  def launch(%Run{status: :starting} = run, on_prompt) do
     case Launcher.start(run) do
       {:ok, info} ->
-        run
-        |> progress(%{
-          status: :working,
-          pane_id: info.pane_id,
-          terminal_id: info.terminal_id,
-          agent_name: info.agent_name,
-          started_at: now()
-        })
-        |> record(
-          "run.start",
-          %{pane: info.pane_id, prompt: info.prompt},
-          if(info.prompt == "submitted", do: :ok, else: :error)
-        )
+        launched =
+          run
+          |> progress(%{
+            status: :working,
+            pane_id: info.pane_id,
+            terminal_id: info.terminal_id,
+            agent_name: info.agent_name,
+            started_at: now()
+          })
+          |> record(
+            "run.start",
+            %{pane: info.pane_id, prompt: info.prompt},
+            if(info.prompt == "submitted", do: :ok, else: :error)
+          )
+
+        on_prompt.(info.prompt)
+        launched
 
       {:error, message} ->
         run
@@ -106,7 +112,7 @@ defmodule Jarvis2.Runs do
     end
   end
 
-  def launch(run), do: run
+  def launch(run, _on_prompt), do: run
 
   @doc """
   Runs an allow-listed Mix task as a run of kind `mix` and returns the runner's own result. The
@@ -202,14 +208,14 @@ defmodule Jarvis2.Runs do
     end
   end
 
-  def prompt_run(%Run{} = run, text) when is_binary(text) do
+  def prompt_run(%Run{} = run, text, opts \\ []) when is_binary(text) do
     text = String.trim(text)
 
     cond do
       text == "" -> {:error, "Write something to send."}
       byte_size(text) > 6_000 -> {:error, "The prompt is too long."}
       not Run.active?(run) -> {:error, "The run is not active."}
-      true -> Launcher.prompt(run, text)
+      true -> Launcher.prompt(run, text, opts)
     end
   end
 

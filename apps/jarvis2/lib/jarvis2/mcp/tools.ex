@@ -1,7 +1,7 @@
 defmodule Jarvis2.MCP.Tools do
   @moduledoc false
   require Logger
-  alias Jarvis2.{Fleet, Questions, Runs}
+  alias Jarvis2.{Fleet, Kanban, Questions, Runs}
   alias Jarvis2.Herdr.{Actions, Client, Mirror, Socket}
   alias Jarvis2.MCP.EventWait
 
@@ -122,8 +122,24 @@ defmodule Jarvis2.MCP.Tools do
     end
   end
 
+  def call("ask_questions", args, %{run_id: run_id}) when is_binary(run_id) do
+    with {:ok, round} <- Kanban.ask_questions(run_id, value(args, :questions)) do
+      {:ok,
+       %{
+         round: round.number,
+         status: "awaiting_user",
+         note: "End your turn now. The answers arrive as your next message."
+       }}
+    end
+  end
+
+  def call("submit_plan", args, %{run_id: run_id}) when is_binary(run_id) do
+    with {:ok, _card} <- Kanban.submit_plan(run_id, value(args, :plan)),
+         do: {:ok, %{status: "done"}}
+  end
+
   def call(name, _args, _caller)
-      when name in ~w(ask_human request_approval wait_for_answer submit_result),
+      when name in ~w(ask_human request_approval wait_for_answer submit_result ask_questions submit_plan),
       do: {:error, "no run for this pane"}
 
   def call("notify_human", args, caller) do

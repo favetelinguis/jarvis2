@@ -259,10 +259,162 @@ defmodule Jarvis2.RunsTest do
                Runs.prompt_run(run, String.duplicate("x", 6_001))
     end
 
+    test "can wait for a busy agent to become idle", %{run: run, mirror: mirror} do
+      :ok = GenServer.call(mirror, {:put, with_run_pane("working")})
+
+      Task.start(fn ->
+        Process.sleep(350)
+        GenServer.call(mirror, {:put, with_run_pane("idle")})
+      end)
+
+      assert {:ok, _} = Runs.prompt_run(run, "follow-up", wait_ms: 2_000)
+      assert_receive {:request, "agent.prompt", %{"text" => "follow-up"}}
+    end
+
+    test "does not deliver a waiting prompt to a replaced terminal", %{run: run, mirror: mirror} do
+      :ok = GenServer.call(mirror, {:put, with_run_pane("working")})
+      waiting = Task.async(fn -> Runs.prompt_run(run, "private answer", wait_ms: 2_000) end)
+      Process.sleep(300)
+      :ok = GenServer.call(mirror, {:put, with_run_pane("idle", terminal: "replacement")})
+      assert {:error, _} = Task.await(waiting, 3_000)
+      refute_receive {:request, "agent.prompt", _}, 100
+    end
+
     test "a finished run cannot be prompted or stopped", %{run: run} do
       {:ok, stopped} = Runs.stop_run(run)
       assert {:error, "The run is not active."} = Runs.prompt_run(stopped, "hello")
       assert {:error, "The run is not active."} = Runs.stop_run(stopped)
+    end
+  end
+
+  describe "kanban integration" do
+    test "a scratch card starts only one run", ctx do
+      {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan this", cwd: ctx.cwd})
+
+      results =
+        1..2
+        |> Task.async_stream(fn _ -> Jarvis2.Kanban.move(card, :agent) end, max_concurrency: 2)
+        |> Enum.map(fn {:ok, value} -> value end)
+
+      assert [{:ok, moved}] = Enum.filter(results, &match?({:ok, _}, &1))
+      assert [{:error, _}] = Enum.filter(results, &match?({:error, _}, &1))
+      assert moved.column == :agent
+      assert length(Runs.list_runs()) == 1
+      assert_receive {:request, "agent.start", _}, 3_000
+      assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
+      assert text =~ "ask_questions"
+      assert_eventually(fn -> Journal.count(type: "run.start", run_id: moved.run_id) > 0 end)
+      assert Runs.get_run(moved.run_id).status == :working
+    end
+
+    test "reopen delivers feedback to the same pane", ctx do
+      run = working_run(ctx)
+      {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan this", cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+      assert {:ok, _} = Jarvis2.Kanban.submit_plan(run.id, "The plan")
+      card = Jarvis2.Kanban.get_card(card.id)
+      assert {:ok, reopened} = Jarvis2.Kanban.reopen(card, "Add alternatives")
+      assert reopened.run_id == run.id
+      assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
+      assert text =~ "Add alternatives"
+      assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) > 0 end)
+      assert length(Runs.list_runs()) == 1
+    end
+
+    test "a dead run is replaced with the plan, latest answers and reopen feedback", ctx do
+      run = working_run(ctx)
+      {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan this", cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+
+      {:ok, round} =
+        Jarvis2.Kanban.ask_questions(run.id, [
+          %{title: "Decision", body: "Choose", recommended: "yes"}
+        ])
+
+      {:ok, round} =
+        Jarvis2.Kanban.save_draft(round, %{"Q1" => %{"kind" => "recommended", "text" => "yes"}})
+
+      {:ok, _} = Jarvis2.Kanban.submit_answers(round)
+      assert_receive {:request, "agent.prompt", _}, 3_000
+      assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) > 0 end)
+      {:ok, _} = Jarvis2.Kanban.submit_plan(run.id, "Previous finished plan")
+      run |> Run.progress_changeset(%{status: :lost}) |> Repo.update!()
+      {:ok, reopened} = Jarvis2.Kanban.reopen(Jarvis2.Kanban.get_card(card.id), "Add more")
+      refute reopened.run_id == run.id
+      assert_receive {:request, "agent.start", _}, 3_000
+      assert_receive {:request, "agent.prompt", %{"text" => text}}, 8_000
+      assert text =~ "Decision"
+      assert text =~ "Previous finished plan"
+      assert text =~ "Add more"
+
+      assert_eventually(fn ->
+        Journal.count(type: "kanban.delivery", run_id: reopened.run_id) > 0
+      end)
+
+      assert Runs.get_run(reopened.run_id).status == :working
+    end
+
+    test "moving to scratch stops the run and cancels its open round", ctx do
+      run = working_run(ctx)
+      {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan this", cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+
+      {:ok, round} =
+        Jarvis2.Kanban.ask_questions(run.id, [
+          %{title: "Which?", body: "Choose", recommended: "yes"}
+        ])
+
+      assert {:ok, _} = Jarvis2.Kanban.move(Jarvis2.Kanban.get_card(card.id), :scratch)
+      assert Runs.get_run(run.id).status == :stopped
+      assert Jarvis2.Kanban.get_round(round.id).status == :cancelled
+      assert_receive {:request, "pane.close", _}
+    end
+
+    test "failed delivery remains pending and can be retried", ctx do
+      config(:kanban_delivery_wait_ms, 300)
+      run = working_run(ctx)
+      {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan this", cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+
+      {:ok, round} =
+        Jarvis2.Kanban.ask_questions(run.id, [
+          %{title: "Which?", body: "Choose", recommended: "yes"}
+        ])
+
+      {:ok, round} =
+        Jarvis2.Kanban.save_draft(round, %{"Q1" => %{"kind" => "recommended", "text" => "yes"}})
+
+      :ok = GenServer.call(ctx.mirror, {:put, with_run_pane("working")})
+      {:ok, _} = Jarvis2.Kanban.submit_answers(round)
+      assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) == 1 end)
+      assert Jarvis2.Kanban.get_round(round.id).delivered_at == nil
+      :ok = GenServer.call(ctx.mirror, {:put, with_run_pane("idle")})
+      assert {:ok, _} = Jarvis2.Kanban.retry_delivery(Jarvis2.Kanban.get_card(card.id))
+      assert_receive {:request, "agent.prompt", _}, 3_000
+      assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) == 2 end)
+      assert %DateTime{} = Jarvis2.Kanban.get_round(round.id).delivered_at
+    end
+
+    test "answers wait for the agent to become idle", ctx do
+      run = working_run(ctx)
+      {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan this", cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+
+      {:ok, round} =
+        Jarvis2.Kanban.ask_questions(run.id, [
+          %{title: "Which?", body: "Choose", recommended: "yes"}
+        ])
+
+      {:ok, round} =
+        Jarvis2.Kanban.save_draft(round, %{"Q1" => %{"kind" => "recommended", "text" => "yes"}})
+
+      :ok = GenServer.call(ctx.mirror, {:put, with_run_pane("working")})
+      {:ok, _} = Jarvis2.Kanban.submit_answers(round)
+      refute_receive {:request, "agent.prompt", _}, 200
+      :ok = GenServer.call(ctx.mirror, {:put, with_run_pane("idle")})
+      assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
+      assert text =~ "accepted your recommendation: yes"
+      assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) > 0 end)
     end
   end
 
@@ -520,6 +672,20 @@ defmodule Jarvis2.RunsTest do
     base
     |> update_in([:snapshot, "panes"], &(&1 ++ [pane]))
     |> update_in([:snapshot, "agents"], &(&1 ++ [agent]))
+  end
+
+  defp assert_eventually(fun, attempts \\ 100) do
+    cond do
+      fun.() ->
+        :ok
+
+      attempts == 0 ->
+        flunk("condition not met")
+
+      true ->
+        Process.sleep(20)
+        assert_eventually(fun, attempts - 1)
+    end
   end
 
   defp config(key, value) do

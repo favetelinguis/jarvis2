@@ -83,7 +83,8 @@ defmodule Jarvis2.Runs.Run do
     end)
   end
 
-  defp validate_cwd(changeset) do
+  @doc false
+  def validate_cwd(changeset) do
     validate_change(changeset, :cwd, fn :cwd, cwd ->
       cond do
         Path.type(cwd) != :absolute -> [cwd: "must be an absolute path"]

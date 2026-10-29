@@ -33,3 +33,13 @@ label { display: grid; gap: .2rem; }
 fieldset { border: 1px solid #8884; border-radius: .4rem; display: grid; gap: .5rem; }
 label.check { display: flex; gap: .6rem; align-items: baseline; }
 .filters { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.kanban-board { display: grid; grid-template-columns: repeat(4, minmax(14rem, 1fr)); gap: .8rem; overflow-x: auto; }
+.kanban-column { background: #8882; padding: .7rem; border-radius: .5rem; min-height: 20rem; }
+.kanban-column.waiting { background: #d9822b22; }
+.kanban-column.drop-target { outline: 2px solid #2a7de1; }
+.kanban-card { border: 1px solid #8886; border-radius: .4rem; padding: .6rem; margin: .5rem 0; background: Canvas; cursor: grab; }
+.kanban-card > a { display: block; font-weight: bold; }
+.kanban-panel { margin-top: 1rem; padding: 1rem; border: 1px solid #8886; border-radius: .5rem; }
+.kanban-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.kanban-panel textarea { width: min(100%, 40rem); min-height: 6rem; }
+.kanban-panel .question button { margin: .2rem; }

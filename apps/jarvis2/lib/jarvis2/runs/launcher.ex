@@ -13,7 +13,7 @@ defmodule Jarvis2.Runs.Launcher do
   @pi_extension "/home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js"
   @ui %{system: "ui", pane: "system:ui"}
   @prompt_wait_ms 15_000
-  @retryable ~w(target_unavailable target_not_ready caller_or_mirror_unavailable)
+  @retryable ~w(target_unavailable target_not_ready caller_or_mirror_unavailable target_busy rate_limited)
 
   def caller(%Run{id: id}), do: Map.put(@ui, :run_id, id)
 
@@ -94,13 +94,19 @@ defmodule Jarvis2.Runs.Launcher do
   def focus(_run), do: {:error, "The run has no pane."}
 
   @doc "Sends a prompt to the run's agent through the prompt guard."
-  def prompt(%Run{pane_id: pane_id} = run, text) when is_binary(pane_id) do
+  def prompt(run, text, opts \\ [])
+
+  def prompt(%Run{pane_id: pane_id} = run, text, opts) when is_binary(pane_id) do
     with {:ok, view} <- fresh(current_view()),
          {_pane, _agent} <- find(run, view) || {:error, "The run's pane is gone."} do
       caller = caller(run)
 
+      deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :wait_ms, 0)
+      valid = Keyword.get(opts, :valid, fn -> true end)
+      check = fn -> check_prompt_target(run, valid) end
+
       caller
-      |> Actions.prompt(pane_id, text, false, server: socket())
+      |> prompt_when_ready(pane_id, text, deadline, check)
       |> Fleet.audit("fleet.prompt", caller, %{target: pane_id, text: text}, source: :ui)
       |> case do
         {:ok, result} -> {:ok, result}
@@ -111,7 +117,7 @@ defmodule Jarvis2.Runs.Launcher do
     end
   end
 
-  def prompt(_run, _text), do: {:error, "The run has no pane."}
+  def prompt(_run, _text, _opts), do: {:error, "The run has no pane."}
 
   @doc "The pane and agent of a run in a mirror view, if the pane is still the one we created."
   def find(%Run{pane_id: pane_id, terminal_id: terminal}, %{snapshot: %{"panes" => panes} = snap})
@@ -135,7 +141,7 @@ defmodule Jarvis2.Runs.Launcher do
          pane_id: pane["pane_id"],
          terminal_id: pane["terminal_id"],
          agent_name: agent_name(run),
-         prompt: send_task(run, pane["pane_id"])
+         prompt: send_task(run, pane)
        }}
     end
   end
@@ -225,24 +231,45 @@ defmodule Jarvis2.Runs.Launcher do
 
   # The mirror learns about the new agent asynchronously, so keep nudging it until the prompt guard
   # sees an idle, ready target.
-  defp send_task(run, pane_id) do
+  defp send_task(run, pane) do
     caller = caller(run)
+    pane_id = pane["pane_id"]
+    expected = %{run | pane_id: pane_id, terminal_id: pane["terminal_id"]}
     deadline = System.monotonic_time(:millisecond) + @prompt_wait_ms
     text = Jarvis2.Runs.Prompt.build(run)
+    check = fn -> check_prompt_target(expected, fn -> true end) end
 
-    result = prompt_when_ready(caller, pane_id, text, deadline)
+    result = prompt_when_ready(caller, pane_id, text, deadline, check)
     Fleet.audit(result, "fleet.prompt", caller, %{target: pane_id, text: text}, source: :ui)
     if match?({:ok, _}, result), do: "submitted", else: "unconfirmed"
   end
 
-  defp prompt_when_ready(caller, pane_id, text, deadline) do
-    result = Actions.prompt(caller, pane_id, text, false, server: socket())
+  defp check_prompt_target(run, valid) do
+    with true <- valid.(),
+         {:ok, %{snapshot: %{"panes" => panes}}} when is_list(panes) <- fresh(current_view()) do
+      case Enum.find(panes, &(&1["pane_id"] == run.pane_id)) do
+        nil -> {:error, %{code: "target_unavailable"}}
+        %{"terminal_id" => terminal} when terminal == run.terminal_id -> :ok
+        _ -> {:error, %{code: "target_changed"}}
+      end
+    else
+      false -> {:error, %{code: "delivery_cancelled"}}
+      _ -> {:error, %{code: "caller_or_mirror_unavailable"}}
+    end
+  end
+
+  defp prompt_when_ready(caller, pane_id, text, deadline, check) do
+    result =
+      case check.() do
+        :ok -> Actions.prompt(caller, pane_id, text, false, server: socket())
+        error -> error
+      end
 
     with {:error, %{code: code}} when code in @retryable <- result,
          true <- System.monotonic_time(:millisecond) < deadline do
       Mirror.invalidate(mirror())
       Process.sleep(250)
-      prompt_when_ready(caller, pane_id, text, deadline)
+      prompt_when_ready(caller, pane_id, text, deadline, check)
     else
       _ -> result
     end
@@ -285,6 +312,11 @@ defmodule Jarvis2.Runs.Launcher do
 
   defp prompt_error("rate_limited"), do: "Too many prompts; try again in a minute."
   defp prompt_error("target_busy"), do: "A prompt was just sent; try again in a few seconds."
+  defp prompt_error("target_changed"), do: "The run's pane was replaced; the prompt was not sent."
+
+  defp prompt_error(code) when code in ["timeout", "disconnected", "agent_prompt_stalled"],
+    do: "The prompt may have been submitted; inspect the agent before retrying (#{code})."
+
   defp prompt_error(code), do: "The prompt was not sent (#{code})."
 
   defp current_view do

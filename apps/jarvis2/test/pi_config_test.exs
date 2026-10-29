@@ -27,7 +27,8 @@ defmodule Jarvis2.PiConfigTest do
     assert config["headers"] == %{"X-Herdr-Pane" => "w1:p9", "X-Herdr-Workspace" => "w1"}
     assert config["exposure"] == "codemode"
 
-    for name <- ~w(ask_human request_approval wait_for_answer submit_result) do
+    for name <-
+          ~w(ask_human request_approval wait_for_answer submit_result ask_questions submit_plan) do
       assert config["toolExposure"][name] == "direct"
     end
   end
