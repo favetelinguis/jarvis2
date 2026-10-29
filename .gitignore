@@ -27,5 +27,9 @@ jarvis2-*.tar
 .expert/
 .elixir_ls/
 
+# Local planning documents.
+plan.md
+PLAN.md
+
 # Release output and OS files.
 .DS_Store
