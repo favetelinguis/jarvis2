@@ -36,7 +36,7 @@ A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bi
 1. Start with `mix run --no-halt` and sign in.
 2. On **Kanban**, add a card with an idea, then drag it to **Agent**. The default agent is Pi,
    model `openrouter/openai/gpt-6-luna`, thinking `low`.
-3. Jarvis2 creates a tab in the `jarvis2` workspace, starts Pi with a Jarvis2 MCP extension,
+3. Jarvis2 creates a tab in the card's project workspace (or its worktree's workspace), starts Pi with a Jarvis2 MCP extension,
    and delivers the card. Answer card questions on the board and other questions in **Inbox**.
    When finished, archive the card to close its tab; restore it with a reason to reload its Pi session.
 
@@ -52,7 +52,7 @@ repository's `.pi/mcp.json` after project trust, or add its `jarvis2` entry to `
 
 | Route                             | Purpose                                                                                                                               |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`                               | Dashboard: connection, workspace → tab → pane tree, agents, worktrees, layout diff, recent events, _Apply dev layout_ |
+| `/`                               | Dashboard: connection, workspace → tab → pane tree, agents, worktrees, layout diff, recent events |
 | `/kanban` | Deliverables board; archive cards to close their tab and restore with a reason and Pi session reload |
 | `/inbox`                          | Every pending question and approval, with a count badge in the navigation                                                             |
 | `/blackboard`                     | Notes shared between agents and you (JSON values)                                                                                     |
@@ -74,7 +74,6 @@ or is agent-only:
 | `list_agents`, `get_layout`, `list_worktrees`      | `/`                                                                     |
 | `read_agent`                                       | agent-only                                                              |
 | `prompt_agent`, `spawn_agent`, `run_command`       | `fleet.*` rows in `/events`                                             |
-| `apply_layout`                                     | _Apply dev layout_ on `/`                                               |
 | `run_mix` | job data in the `runs` table; calls appear in `/events` |
 | `ask_human`, `request_approval`, `wait_for_answer` | `/inbox` and `/events` (run pane only) |
 | `submit_result` | agent-only; calls appear in `/events` (run pane only) |
@@ -89,9 +88,19 @@ Only the board UI moves cards into or out of Archive; MCP has no archive or rest
 prompts include the reason and bounded card context; exceptionally long ideas may be truncated to
 fit the task limit. If the saved Pi session is missing, Pi starts a fresh session with that context.
 
-Kanban kinds other than plan instruct the agent not to edit or publish changes, but this is a prompt rule,
-not a sandbox. Agents started before the `submit_plan` rename must be restarted by moving their card to
-Scratch and back to Agent.
+Plan cards have Planning and Implementation stages. Once a plan is Done, **Accept plan** overwrites
+`PLAN.md` in the planner run's checkout (the chosen worktree, if any) and starts a new implementer pane in the same tab (or a new
+tab if the planner pane is gone). The accepted plan remains visible alongside the implementation report.
+Dragging a Done card back to Agent instead reopens its current stage with feedback. Archive and restore
+retain the current stage.
+
+Research, Explain, Review, Refine and Slides have a single stage and instruct the agent not to edit or
+publish changes. Slides delivers a self-contained HTML deck with an in-board preview and browser download.
+Planning retains its
+existing prompt, while implementation explicitly allows edits and tests but asks the agent not to commit,
+push or alter `PLAN.md`. These are prompt rules, not a sandbox: agents can make real changes. Review the
+safety model before starting them. Agents started before the `submit_plan` rename must be restarted by
+moving their card to Scratch and back to Agent.
 
 `ask_human` and `request_approval` return a ticket immediately; the agent polls `wait_for_answer(ticket,
 timeout_s ≤ 100)` until it is no longer `pending`. Questions expire after an hour and are cancelled on
@@ -113,6 +122,11 @@ result submission or when the run stops, fails or is lost; a run may have five o
 - **Guarded UI and MCP.** UI run actions act as the system caller `ui` through the execution and prompt
   guards and are audited as `fleet.*` events. They skip scenario toggles and the "caller must be a detected
   agent" check; other guard checks still apply.
+- **Worktrees.** A card can create a Git branch and worktree in the selected repository. Jarvis2 never sends `trust_repository`, removes worktrees, or explicitly closes workspaces. Herdr may close a workspace when its last tab closes.
+- **Slide decks.** Agent-written HTML is untrusted. Preview and standalone views use a sandbox and restrictive CSP;
+  downloads contain a CSP meta and are checked for common external references. The check is not a security
+  boundary: a downloaded file runs scripts outside the preview sandbox and can navigate to remote sites. Review
+  decks before sharing or opening them, especially on a networked machine.
 - **Redaction.** Prompt, command and summary text, blackboard values and matched output lines are never stored in
   the journal (only their sizes); credential-looking keys and bearer strings are masked.
 
@@ -139,7 +153,6 @@ Enabled from Settings, each records `automation.*` rows in the journal:
   pane/tab renaming, which can overwrite manual labels; see `examples/herdr-config.snippet.toml`.
   The shared Herdr configuration also applies when you attach to `jarvis2`.
 - `custom_worker`: shows a running `run_mix` job on the server's own pane, if it is in the dedicated session.
-- `declarative_layout`: the _dev_ layout, a **new** tab with three labelled shells.
 
 ## Development
 

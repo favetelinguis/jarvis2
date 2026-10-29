@@ -59,15 +59,17 @@ defmodule Jarvis2.Runs do
   end
 
   @doc "Runs the launch sequence for a `:starting` run and records the outcome."
-  def launch(run, on_prompt \\ fn _ -> :ok end, label \\ nil)
+  def launch(run, on_prompt \\ fn _ -> :ok end, label \\ nil, placement \\ :tab)
 
-  def launch(%Run{status: :starting} = run, on_prompt, label) do
-    case Launcher.start(run, label) do
+  def launch(%Run{status: :starting} = run, on_prompt, label, placement) do
+    case Launcher.start(run, label, placement) do
       {:ok, info} ->
         launched =
           run
           |> progress(%{
             status: :working,
+            workspace_id: info.workspace_id,
+            cwd: info.cwd,
             tab_id: info.tab_id,
             pane_id: info.pane_id,
             terminal_id: info.terminal_id,
@@ -90,7 +92,7 @@ defmodule Jarvis2.Runs do
     end
   end
 
-  def launch(run, _on_prompt, _label), do: run
+  def launch(run, _on_prompt, _label, _placement), do: run
 
   @doc """
   Runs an allow-listed Mix task as a run of kind `mix` and returns the runner's own result. The

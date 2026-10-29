@@ -4,7 +4,7 @@ defmodule Jarvis2.Kanban do
 
   alias Jarvis2.{Journal, Repo, Runs}
   alias Jarvis2.Herdr.Mirror
-  alias Jarvis2.Kanban.{Card, Feedback, Kind, Prompt, Round}
+  alias Jarvis2.Kanban.{Card, Feedback, Kind, Prompt, Round, Slides}
   alias Jarvis2.Runs.{Launcher, Run}
 
   def topic, do: "kanban"
@@ -130,7 +130,9 @@ defmodule Jarvis2.Kanban do
     unless Round.valid_answers?(current, current.answers) and Round.complete?(current),
       do: Repo.rollback("Answer every question first.")
 
-    if byte_size(Prompt.answers(current)) > 6_000,
+    card = Repo.get!(Card, current.card_id)
+
+    if byte_size(Prompt.answers(current, card.stage)) > 6_000,
       do: Repo.rollback("Answers are too long to deliver; shorten them.")
 
     transition!(current.card_id, :awaiting_user, :agent)
@@ -150,13 +152,18 @@ defmodule Jarvis2.Kanban do
         {:error, "Not a kanban run."}
 
       card ->
-        max = Kind.get(card.kind).max_deliverable
+        with :ok <- validate_deliverable(card, content), do: finish(card, run_id, content)
+    end
+  end
 
-        cond do
-          not is_binary(content) or String.trim(content) == "" -> {:error, "Invalid deliverable."}
-          byte_size(content) > max -> {:error, "Deliverable exceeds #{max} bytes; shorten it."}
-          true -> finish(card, run_id, content)
-        end
+  defp validate_deliverable(card, content) do
+    max = Kind.stage(card.kind, card.stage).max_deliverable
+
+    cond do
+      not is_binary(content) or String.trim(content) == "" -> {:error, "Invalid deliverable."}
+      byte_size(content) > max -> {:error, "Deliverable exceeds #{max} bytes; shorten it."}
+      Kind.deliverable_type(card.kind) == :html -> Slides.validate(content)
+      true -> :ok
     end
   end
 
@@ -178,6 +185,108 @@ defmodule Jarvis2.Kanban do
       "kanban.deliverable"
     )
   end
+
+  def advance(%Card{id: id} = card) do
+    :global.trans({{__MODULE__, :advance, id}, self()}, fn -> advance_current(card) end)
+  end
+
+  defp advance_current(card) do
+    current = get_card(card.id)
+
+    with {:ok, next_stage} <- advanceable(current, card),
+         :ok <- availability(),
+         :ok <- write_plan(current.run.cwd, current.deliverable) do
+      advance_transaction(current, next_stage)
+    end
+  end
+
+  defp advanceable(nil, _card), do: {:error, "The card changed; reload it and try again."}
+
+  defp advanceable(current, card) do
+    stage = Kind.stage(current.kind, current.stage)
+
+    cond do
+      current.updated_at != card.updated_at ->
+        {:error, "The card changed; reload it and try again."}
+
+      current.column != :done or is_nil(stage) or is_nil(stage.advance) ->
+        {:error, "This card cannot be advanced."}
+
+      not is_binary(current.deliverable) or String.trim(current.deliverable) == "" ->
+        {:error, "A deliverable is required before advancing."}
+
+      is_nil(current.run_id) ->
+        {:error, "The card has no planner run."}
+
+      true ->
+        {:ok, stage.advance.to}
+    end
+  end
+
+  defp advance_transaction(card, next_stage) do
+    result =
+      Repo.transaction(fn ->
+        transition!(card.id, :done, :agent,
+          run_id: card.run_id,
+          expected_updated_at: card.updated_at,
+          stage: next_stage,
+          stage_started_at: DateTime.utc_now(),
+          accepted_plan: card.deliverable,
+          deliverable: nil
+        )
+
+        mark_stale_delivered(card.id)
+        current = get_card(card.id)
+        {:launch, run, _} = created = create_agent!(current, nil, nil, :advance, card.run_id)
+
+        Journal.record(%{
+          source: :ui,
+          type: "kanban.advanced",
+          run_id: run.id,
+          payload: %{card_id: card.id, plan_bytes: byte_size(card.deliverable)}
+        })
+
+        created
+      end)
+
+    case result do
+      {:ok, {:launch, run, _}} ->
+        broadcast_card(get_card(card.id))
+        launch(run, nil, card.id, card.title, placement(card.run))
+        {:ok, get_card(card.id)}
+
+      error ->
+        error
+    end
+  end
+
+  defp write_plan(cwd, content) do
+    target = Path.join(cwd, "PLAN.md")
+    temp = Path.join(cwd, ".PLAN.md-" <> Ecto.UUID.generate())
+
+    result =
+      with {:ok, file} <- File.open(temp, [:write, :exclusive, :binary]),
+           result <- IO.binwrite(file, content),
+           close <- File.close(file),
+           :ok <- result,
+           :ok <- close do
+        File.rename(temp, target)
+      end
+
+    if result != :ok, do: File.rm(temp)
+    if result == :ok, do: :ok, else: {:error, "Could not write PLAN.md in the working directory."}
+  end
+
+  defp placement(%Run{tab_id: tab_id} = run) when is_binary(tab_id) and tab_id != "" do
+    view = current_view()
+
+    case Launcher.find(run, view) do
+      {%{"tab_id" => ^tab_id}, _} -> {:split, run.pane_id, tab_id}
+      _ -> :tab
+    end
+  end
+
+  defp placement(_), do: :tab
 
   def move(%Card{column: :scratch} = card, to) when to in [:agent, "agent"] do
     with :ok <- availability(), do: start_or_resume(card, :scratch, nil)
@@ -252,6 +361,8 @@ defmodule Jarvis2.Kanban do
           current = get_card(card.id)
           if from == :archive, do: mark_stale_delivered(card.id)
 
+          store_deck!(current)
+
           item =
             if feedback,
               do:
@@ -278,6 +389,15 @@ defmodule Jarvis2.Kanban do
     end
   end
 
+  defp store_deck!(card) do
+    if card.deliverable && Kind.deliverable_type(card.kind) == :html do
+      case Slides.store(card) do
+        :ok -> :ok
+        {:error, message} -> Repo.rollback(message)
+      end
+    end
+  end
+
   defp mark_stale_delivered(card_id) do
     now = DateTime.utc_now()
 
@@ -300,7 +420,7 @@ defmodule Jarvis2.Kanban do
 
   defp prepare_agent!(card, item, feedback, from), do: create_agent!(card, item, feedback, from)
 
-  defp create_agent!(card, item, feedback, from) do
+  defp create_agent!(card, item, feedback, from, parent_run_id \\ nil) do
     restored = from == :archive
     session_id = if (restored and card.run) && card.run.kind == "pi", do: card.run.session_id
     session_id = session_id || Ecto.UUID.generate()
@@ -308,8 +428,10 @@ defmodule Jarvis2.Kanban do
     attrs = %{
       name: String.slice(card.title, 0, 64),
       cwd: card.cwd,
+      worktree: card.worktree,
       task: Prompt.build(card, card.rounds, feedback, restored: restored),
-      session_id: session_id
+      session_id: session_id,
+      parent_run_id: parent_run_id
     }
 
     case Runs.create_run(attrs) do
@@ -322,9 +444,9 @@ defmodule Jarvis2.Kanban do
     end
   end
 
-  defp launch(run, item, card_id, title) do
+  defp launch(run, item, card_id, title, placement \\ :tab) do
     Task.Supervisor.start_child(Jarvis2.TaskSupervisor, fn ->
-      Runs.launch(run, &record_launch_delivery(&1, item, card_id), title)
+      Runs.launch(run, &record_launch_delivery(&1, item, card_id), title, placement)
     end)
   end
 
@@ -372,8 +494,8 @@ defmodule Jarvis2.Kanban do
     if Run.active?(run) do
       text =
         case item do
-          %Round{} -> Prompt.answers(item)
-          %Feedback{} -> Prompt.reopen(item.text, card.kind)
+          %Round{} -> Prompt.answers(item, card.stage)
+          %Feedback{} -> Prompt.reopen(item.text, card.kind, card.stage, card.id)
         end
 
       valid = fn -> delivery_valid?(card.id, run.id, item) end
@@ -410,22 +532,28 @@ defmodule Jarvis2.Kanban do
     item |> Ecto.Changeset.change(delivered_at: DateTime.utc_now()) |> Repo.update()
   end
 
-  defp availability do
-    view =
-      try do
-        Mirror.get(Application.get_env(:jarvis2, :mirror, Mirror))
-      catch
-        :exit, _ -> nil
-      end
+  defp availability, do: Launcher.availability(current_view())
 
-    Launcher.availability(view)
+  defp current_view do
+    Mirror.get(Application.get_env(:jarvis2, :mirror, Mirror))
+  catch
+    :exit, _ -> nil
   end
 
   defp transition!(id, from, to, attrs \\ []) do
     now = DateTime.utc_now()
     query = from c in Card, where: c.id == ^id and c.column in ^List.wrap(from)
     query = if attrs[:run_id], do: where(query, [c], c.run_id == ^attrs[:run_id]), else: query
-    changes = [column: to, updated_at: now] ++ Keyword.take(attrs, [:deliverable])
+
+    query =
+      if attrs[:expected_updated_at],
+        do: where(query, [c], c.updated_at == ^attrs[:expected_updated_at]),
+        else: query
+
+    changes =
+      [column: to, updated_at: now] ++
+        Keyword.take(attrs, [:deliverable, :stage, :stage_started_at, :accepted_plan])
+
     {count, _} = Repo.update_all(query, set: changes)
     if count != 1, do: Repo.rollback("The card changed or that move is not allowed.")
   end
@@ -445,6 +573,9 @@ defmodule Jarvis2.Kanban do
 
   defp changed(card, event) do
     Journal.record(%{source: :ui, type: event, run_id: card.run_id, payload: %{card_id: card.id}})
-    Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, topic(), {:card, card})
+    broadcast_card(card)
   end
+
+  defp broadcast_card(card),
+    do: Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, topic(), {:card, card})
 end

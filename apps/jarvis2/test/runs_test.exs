@@ -82,6 +82,209 @@ defmodule Jarvis2.RunsTest do
     end
   end
 
+  test "accepting a plan creates a child run in the planner tab", ctx do
+    {:ok, card} =
+      Jarvis2.Kanban.create_card(%{title: "Build", cwd: ctx.cwd, stage: :implementation})
+
+    assert card.stage == :planning
+    {:ok, planner} = Runs.create_run(%{name: "planner", task: "plan", cwd: ctx.cwd})
+    planner = Runs.launch(planner)
+    assert_receive {:request, "tab.create", _}
+    planner = planner |> Run.progress_changeset(%{status: :done}) |> Repo.update!()
+    File.write!(Path.join(ctx.cwd, "PLAN.md"), "old plan")
+    card |> Ecto.Changeset.change(column: :agent, run_id: planner.id) |> Repo.update!()
+    plan = String.duplicate("private plan", 1_500)
+    {:ok, _} = Jarvis2.Kanban.submit_deliverable(planner.id, plan)
+    card = Jarvis2.Kanban.get_card(card.id)
+    assert {:ok, advanced} = Jarvis2.Kanban.advance(card)
+    assert File.read!(Path.join(ctx.cwd, "PLAN.md")) == plan
+    assert advanced.stage == :implementation
+    assert advanced.column == :agent
+    assert advanced.accepted_plan == plan
+    assert advanced.deliverable == nil
+    assert advanced.run_id != planner.id
+    assert advanced.run.parent_run_id == planner.id
+    assert advanced.run.task =~ "PLAN.md"
+    refute advanced.run.task =~ plan
+    assert byte_size(advanced.run.task) <= 6_000
+    assert_receive {:request, "pane.split", %{"target_pane_id" => "w1:p9", "env" => env}}, 3_000
+    assert env["JARVIS2_RUN_ID"] == advanced.run_id
+    refute_receive {:request, "tab.create", _}, 50
+    assert_eventually(fn -> Runs.get_run(advanced.run_id).status == :working end)
+    assert Runs.get_run(advanced.run_id).tab_id == planner.tab_id
+    assert {:error, _} = Jarvis2.Kanban.submit_deliverable(planner.id, "obsolete")
+
+    assert {:ok, _} =
+             Jarvis2.Kanban.ask_questions(advanced.run_id, [
+               %{title: "Choice", body: "Details", recommended: "Yes"}
+             ])
+
+    assert Jarvis2.Kanban.get_card(card.id).column == :awaiting_user
+    assert {:ok, _} = Jarvis2.Kanban.submit_deliverable(advanced.run_id, "report")
+    done = Jarvis2.Kanban.get_card(card.id)
+    assert done.accepted_plan == plan
+    assert done.deliverable == "report"
+    assert {:error, _} = Jarvis2.Kanban.advance(done)
+
+    assert [%{payload: %{"card_id" => id, "plan_bytes" => bytes}}] =
+             Journal.recent(type: "kanban.advanced")
+
+    assert id == card.id
+    assert bytes == byte_size(plan)
+    refute inspect(Journal.recent()) =~ plan
+    Runs.apply_view(view(), %{})
+    assert Runs.get_run(planner.id).status == :lost
+  end
+
+  test "accept writes into the planner checkout and copies the card worktree", ctx do
+    checkout = Path.join(ctx.cwd, "checkout")
+    File.mkdir_p!(checkout)
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "plan", cwd: ctx.cwd, worktree: "feature"})
+
+    {:ok, planner} =
+      Runs.create_run(%{name: "planner", task: "plan", cwd: checkout, worktree: "feature"})
+
+    card =
+      card
+      |> Ecto.Changeset.change(column: :done, deliverable: "plan here", run_id: planner.id)
+      |> Repo.update!()
+
+    Agent.update(
+      ctx.behavior,
+      &Map.put(
+        &1,
+        "worktree.list",
+        {:reply,
+         %{
+           worktrees: [
+             %{path: ctx.cwd, is_linked_worktree: false, open_workspace_id: "w1"},
+             %{
+               path: checkout,
+               branch: "feature",
+               is_linked_worktree: true,
+               open_workspace_id: "w1"
+             }
+           ]
+         }}
+      )
+    )
+
+    assert {:ok, advanced} = Jarvis2.Kanban.advance(card)
+    assert advanced.run.worktree == "feature"
+    assert File.read!(Path.join(checkout, "PLAN.md")) == "plan here"
+    refute File.exists?(Path.join(ctx.cwd, "PLAN.md"))
+    assert_eventually(fn -> Runs.get_run(advanced.run_id).status == :working end)
+  end
+
+  test "advance refuses invalid states and file errors without changing the card", ctx do
+    {:ok, plan} = Jarvis2.Kanban.create_card(%{title: "plan", cwd: ctx.cwd})
+    {:ok, other} = Jarvis2.Kanban.create_card(%{title: "review", kind: :review, cwd: ctx.cwd})
+    assert other.stage == :main
+    assert {:error, _} = Jarvis2.Kanban.advance(plan)
+    other = other |> Ecto.Changeset.change(column: :done, deliverable: "review") |> Repo.update!()
+    assert {:error, _} = Jarvis2.Kanban.advance(other)
+    {:ok, planner} = Runs.create_run(%{name: "planner", task: "plan", cwd: ctx.cwd})
+    plan = plan |> Ecto.Changeset.change(column: :done, run_id: planner.id) |> Repo.update!()
+    assert {:error, _} = Jarvis2.Kanban.advance(plan)
+    plan = plan |> Ecto.Changeset.change(deliverable: "plan") |> Repo.update!()
+    :ok = GenServer.call(ctx.mirror, {:put, %{stale: true, snapshot: nil}})
+    assert {:error, "Herdr" <> _} = Jarvis2.Kanban.advance(plan)
+    :ok = GenServer.call(ctx.mirror, {:put, view()})
+    File.mkdir!(Path.join(ctx.cwd, "PLAN.md"))
+    assert {:error, "Could not write PLAN.md" <> _} = Jarvis2.Kanban.advance(plan)
+    assert Jarvis2.Kanban.get_card(plan.id).column == :done
+    assert Jarvis2.Kanban.get_card(plan.id).run_id == planner.id
+    assert Repo.aggregate(Run, :count) == 1
+    assert File.ls!(ctx.cwd) |> Enum.all?(&(not String.starts_with?(&1, ".PLAN.md-")))
+  end
+
+  test "accept falls back to a new tab when the planner pane is missing", ctx do
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "plan", cwd: ctx.cwd})
+    {:ok, planner} = Runs.create_run(%{name: "planner", task: "plan", cwd: ctx.cwd})
+
+    card =
+      card
+      |> Ecto.Changeset.change(column: :done, deliverable: "plan", run_id: planner.id)
+      |> Repo.update!()
+
+    assert {:ok, advanced} = Jarvis2.Kanban.advance(card)
+    assert_receive {:request, "tab.create", _}, 3_000
+    refute_receive {:request, "pane.split", _}, 100
+    assert_eventually(fn -> Runs.get_run(advanced.run_id).status == :working end)
+  end
+
+  test "restoring an implementation card starts that stage in a new tab", ctx do
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "plan", cwd: ctx.cwd})
+    {:ok, run} = Runs.create_run(%{name: "implementer", task: "old", cwd: ctx.cwd})
+    run |> Run.progress_changeset(%{status: :stopped}) |> Repo.update!()
+
+    card =
+      card
+      |> Ecto.Changeset.change(
+        column: :done,
+        stage: :implementation,
+        accepted_plan: "private plan",
+        run_id: run.id
+      )
+      |> Repo.update!()
+
+    assert {:ok, archived} = Jarvis2.Kanban.move(card, :archive)
+    assert {:ok, restored} = Jarvis2.Kanban.reopen(archived, "Continue work")
+    assert restored.stage == :implementation
+    assert restored.run.task =~ "PLAN.md"
+    assert restored.run.task =~ "Continue work"
+    refute restored.run.task =~ "private plan"
+    assert_receive {:request, "tab.create", _}, 3_000
+    refute_receive {:request, "pane.split", _}, 100
+    assert_eventually(fn -> Runs.get_run(restored.run_id).status == :working end)
+  end
+
+  test "restoring an archived worktree card resolves the checkout again", ctx do
+    checkout = Path.join(ctx.cwd, "linked")
+    File.mkdir_p!(checkout)
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "plan", cwd: ctx.cwd, worktree: "feature"})
+    {:ok, old} = Runs.create_run(%{name: "old", task: "old", cwd: checkout, worktree: "feature"})
+    old |> Run.progress_changeset(%{status: :stopped}) |> Repo.update!()
+    card = card |> Ecto.Changeset.change(column: :archive, run_id: old.id) |> Repo.update!()
+
+    Agent.update(
+      ctx.behavior,
+      &Map.put(
+        &1,
+        "worktree.list",
+        {:reply,
+         %{
+           worktrees: [
+             %{path: ctx.cwd, is_linked_worktree: false, open_workspace_id: "w1"},
+             %{
+               path: checkout,
+               branch: "feature",
+               is_linked_worktree: true,
+               open_workspace_id: "w1"
+             }
+           ]
+         }}
+      )
+    )
+
+    assert {:ok, restored} = Jarvis2.Kanban.reopen(card, "Continue")
+    assert restored.run.worktree == "feature"
+    assert_receive {:request, "worktree.list", %{"cwd" => project}}, 3_000
+    assert project == ctx.cwd
+    assert_receive {:request, "tab.create", %{"cwd" => ^checkout}}, 3_000
+    assert_eventually(fn -> Runs.get_run(restored.run_id).status == :working end)
+  end
+
+  test "split timeout marks the run failed and warns against blind retries", ctx do
+    :ok = GenServer.call(ctx.mirror, {:put, with_run_pane("idle")})
+    Agent.update(ctx.behavior, &Map.put(&1, "pane.split", {:error, "timeout"}))
+    {:ok, run} = Runs.create_run(%{name: "impl", task: "implement", cwd: ctx.cwd})
+    result = Runs.launch(run, fn _ -> :ok end, nil, {:split, "w1:p9", "w1:t2"})
+    assert result.status == :failed
+    assert result.result["error"] =~ "may have been created"
+    refute_receive {:request, "tab.create", _}, 50
+  end
+
   test "session ids are validated and passed only to Pi", %{cwd: cwd} do
     attrs = %{name: "demo", task: "x", cwd: cwd}
 
@@ -204,47 +407,81 @@ defmodule Jarvis2.RunsTest do
       refute_receive {:request, "agent.start", _}, 100
     end
 
-    test "creates the workspace when no anchor exists", ctx do
-      live!()
-      empty = update_in(view(), [:snapshot], &Map.merge(&1, %{"workspaces" => [], "panes" => []}))
-      :ok = GenServer.call(ctx.mirror, {:put, empty})
-      {:ok, run} = Runs.create_run(%{name: "demo", task: "t", cwd: ctx.cwd})
+    test "launch stores resolved workspace and checkout and closes only the fresh tab after creation",
+         ctx do
+      checkout = Path.join(ctx.cwd, "checkout")
+      File.mkdir_p!(checkout)
 
-      assert %Run{status: :working} = Runs.launch(run)
+      Agent.update(
+        ctx.behavior,
+        &Map.merge(&1, %{
+          "worktree.list" =>
+            {:reply,
+             %{
+               worktrees: [
+                 %{path: ctx.cwd, is_linked_worktree: false, open_workspace_id: "w1"},
+                 %{path: checkout, branch: "feature", is_linked_worktree: true}
+               ]
+             }},
+          "worktree.open" =>
+            {:reply,
+             %{
+               workspace: %{workspace_id: "w1"},
+               tab: %{tab_id: "w1:t8"},
+               worktree: %{path: checkout}
+             }}
+        })
+      )
 
-      assert_receive {:request, "workspace.create",
-                      %{"label" => "jarvis2", "cwd" => cwd, "focus" => false}}
+      {:ok, run} =
+        Runs.create_run(%{name: "test", task: "test", cwd: ctx.cwd, worktree: "feature"})
 
-      assert cwd == ctx.cwd
-      assert_receive {:request, "tab.create", %{"workspace_id" => "w1"}}
+      run = Runs.launch(run)
+      assert run.status == :working
+      assert %{workspace_id: "w1", cwd: ^checkout, worktree: "feature"} = Runs.get_run(run.id)
+      assert_receive {:request, "worktree.open", %{"workspace_id" => "w1", "branch" => "feature"}}
+      assert_receive {:request, "tab.create", %{"workspace_id" => "w1", "cwd" => ^checkout}}
+      assert_receive {:request, "tab.close", %{"tab_id" => "w1:t8"}}
     end
 
-    test "a rejected workspace creation does not create a tab", ctx do
-      live!()
-      empty = update_in(view(), [:snapshot], &Map.merge(&1, %{"workspaces" => [], "panes" => []}))
-      :ok = GenServer.call(ctx.mirror, {:put, empty})
-      Agent.update(ctx.behavior, &Map.put(&1, "workspace.create", {:error, "invalid_request"}))
-      {:ok, run} = Runs.create_run(%{name: "demo", task: "t", cwd: ctx.cwd})
-      assert %Run{status: :failed, result: %{"error" => message}} = Runs.launch(run)
-      assert message =~ "inspect the session before retrying"
-      assert_receive {:request, "workspace.create", _}
-      refute_receive {:request, "tab.create", _}, 100
+    test "close failure is ignored and rejected worktrees do not create a tab", ctx do
+      Agent.update(
+        ctx.behavior,
+        &Map.merge(&1, %{
+          "worktree.list" =>
+            {:reply, %{worktrees: [%{path: ctx.cwd, is_linked_worktree: false}]}},
+          "tab.close" => {:error, "invalid_request"}
+        })
+      )
+
+      {:ok, run} = Runs.create_run(%{name: "test", task: "test", cwd: ctx.cwd})
+      assert Runs.launch(run).status == :working
+      assert_receive {:request, "tab.create", _}
+      assert_receive {:request, "tab.close", %{"tab_id" => "w1:t1"}}
+      Agent.update(ctx.behavior, &Map.put(&1, "worktree.open", {:error, "worktree_busy"}))
+      {:ok, run} = Runs.create_run(%{name: "test", task: "test", cwd: ctx.cwd})
+      assert %{status: :failed, result: %{"error" => message}} = Runs.launch(run)
+      assert message =~ "worktree_busy"
+      refute_receive {:request, "tab.create", _}, 50
     end
 
-    test "anchor ignores focused panes in other workspaces" do
-      other = %{"workspace_id" => "w2", "label" => "other"}
-      other_pane = %{"workspace_id" => "w2", "pane_id" => "w2:p1"}
+    test "split in a different workspace falls back to a new tab", ctx do
+      :ok = GenServer.call(ctx.mirror, {:put, with_run_pane("idle")})
 
-      snapshot =
-        view().snapshot
-        |> Map.put("focused_pane_id", "w2:p1")
-        |> Map.update!("workspaces", &[other | &1])
-        |> Map.update!("panes", &[other_pane | &1])
+      Agent.update(
+        ctx.behavior,
+        &Map.put(
+          &1,
+          "worktree.list",
+          {:reply,
+           %{worktrees: [%{path: ctx.cwd, is_linked_worktree: false, open_workspace_id: "w2"}]}}
+        )
+      )
 
-      assert {:ok, %{"pane_id" => "w1:p1"}} = Launcher.anchor(%{snapshot: snapshot})
-
-      assert {:error, :no_anchor} =
-               Launcher.anchor(%{snapshot: %{snapshot | "workspaces" => [other]}})
+      {:ok, run} = Runs.create_run(%{name: "test", task: "test", cwd: ctx.cwd})
+      _ = Runs.launch(run, fn _ -> :ok end, nil, {:split, "w1:p9", "w1:t2"})
+      assert_receive {:request, "tab.create", %{"workspace_id" => "w2"}}
+      refute_receive {:request, "pane.split", _}, 50
     end
 
     test "an unconfirmed task is reported but the run keeps its pane", ctx do
@@ -511,6 +748,46 @@ defmodule Jarvis2.RunsTest do
       :ok = GenServer.call(ctx.mirror, {:put, %{view() | stale: true}})
       assert {:error, _} = Kanban.reopen(archived, "try again")
       assert Kanban.get_card(card.id).column == :archive
+    end
+
+    test "slides reopen and restore provide the saved deck to the agent", ctx do
+      run = working_run(ctx)
+      {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Deck", kind: :slides, cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+      html = "<!doctype html><html><head></head><body>Private deck</body></html>"
+      {:ok, _} = Jarvis2.Kanban.submit_deliverable(run.id, html)
+      path = Jarvis2.Kanban.Slides.path(card.id)
+      {:ok, reopened} = Jarvis2.Kanban.reopen(Jarvis2.Kanban.get_card(card.id), "Revise")
+      assert reopened.run_id == run.id
+      assert File.read!(path) == html
+      assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
+      assert text =~ path
+      refute text =~ html
+      assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) > 0 end)
+      {:ok, _} = Jarvis2.Kanban.submit_deliverable(run.id, html)
+      {:ok, archived} = Jarvis2.Kanban.move(Jarvis2.Kanban.get_card(card.id), :archive)
+      {:ok, restored} = Jarvis2.Kanban.reopen(archived, "Restore")
+      assert restored.run.task =~ path
+      refute restored.run.task =~ html
+      assert File.read!(path) == html
+      assert_eventually(fn -> Runs.get_run(restored.run_id).status == :working end, 500)
+    end
+
+    test "slides reopen rolls back if its transient deck cannot be written", ctx do
+      run = working_run(ctx)
+      {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Deck", kind: :slides, cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+      html = "<!doctype html><html><head></head><body>Deck</body></html>"
+      {:ok, _} = Jarvis2.Kanban.submit_deliverable(run.id, html)
+      path = Jarvis2.Kanban.Slides.path(card.id)
+      File.mkdir_p!(path)
+      on_exit(fn -> File.rm_rf!(path) end)
+
+      assert {:error, "Could not save" <> _} =
+               Jarvis2.Kanban.reopen(Jarvis2.Kanban.get_card(card.id), "Revise")
+
+      assert Jarvis2.Kanban.get_card(card.id).column == :done
+      refute_receive {:request, "agent.prompt", _}, 100
     end
 
     test "reopen delivers feedback to the same pane", ctx do
@@ -799,9 +1076,41 @@ defmodule Jarvis2.RunsTest do
     end
   end
 
+  defp respond(%{"method" => "worktree.list", "params" => %{"cwd" => cwd}}, _mirror, _) do
+    {:reply,
+     %{
+       result: %{
+         type: "worktree_list",
+         worktrees: [
+           %{path: cwd, branch: "main", is_linked_worktree: false, open_workspace_id: "w1"}
+         ]
+       }
+     }}
+  end
+
   defp respond(%{"method" => "workspace.create"}, _mirror, _) do
     pane = %{pane_id: "w1:p1", terminal_id: "term-anchor", workspace_id: "w1", tab_id: "w1:t1"}
-    {:reply, %{result: %{type: "workspace_created", root_pane: pane}}}
+
+    {:reply,
+     %{
+       result: %{
+         type: "workspace_created",
+         workspace: %{workspace_id: "w1"},
+         tab: %{tab_id: "w1:t1"},
+         root_pane: pane
+       }
+     }}
+  end
+
+  defp respond(%{"method" => "worktree.open", "params" => params}, _mirror, _) do
+    {:reply,
+     %{
+       result: %{
+         workspace: %{workspace_id: "w1"},
+         tab: %{tab_id: "w1:t1"},
+         worktree: %{path: params["path"]}
+       }
+     }}
   end
 
   defp respond(%{"method" => "tab.create"}, _mirror, _) do
@@ -809,9 +1118,15 @@ defmodule Jarvis2.RunsTest do
     {:reply, %{result: %{type: "tab_created", tab: %{tab_id: "w1:t2"}, root_pane: pane}}}
   end
 
-  defp respond(%{"method" => "pane.process_info"}, _mirror, _) do
+  defp respond(%{"method" => "pane.split", "params" => params}, _mirror, _) do
+    pane = %{pane_id: "w1:p10", terminal_id: "term-impl", workspace_id: "w1", tab_id: "w1:t2"}
+    if params["target_pane_id"] != "w1:p9", do: raise("unexpected split target")
+    {:reply, %{result: %{type: "pane_info", pane: pane}}}
+  end
+
+  defp respond(%{"method" => "pane.process_info", "params" => params}, _mirror, _) do
     info = %{
-      pane_id: "w1:p9",
+      pane_id: params["pane_id"],
       shell_pid: 7,
       foreground_process_group_id: 7,
       foreground_processes: [%{pid: 7}]
@@ -821,7 +1136,31 @@ defmodule Jarvis2.RunsTest do
   end
 
   defp respond(%{"method" => "agent.start", "params" => params}, mirror, _) do
-    :ok = GenServer.call(mirror, {:put, with_run_pane("idle")})
+    view = with_run_pane("idle")
+
+    view =
+      if params["pane_id"] == "w1:p10" do
+        update_in(view, [:snapshot, "agents"], fn agents ->
+          agents ++
+            [
+              %{
+                "pane_id" => "w1:p10",
+                "terminal_id" => "other",
+                "workspace_id" => "w1",
+                "tab_id" => "w1:t2",
+                "agent" => "pi",
+                "agent_status" => "idle",
+                "interactive_ready" => true
+              }
+            ]
+        end)
+        |> put_in([:snapshot, "panes", Access.at(2), "terminal_id"], "term-impl")
+        |> put_in([:snapshot, "agents", Access.at(1), "terminal_id"], "term-impl")
+      else
+        view
+      end
+
+    :ok = GenServer.call(mirror, {:put, view})
     agent = %{pane_id: params["pane_id"], name: params["name"], agent: params["kind"]}
     {:reply, %{result: %{type: "agent_started", agent: agent}}}
   end

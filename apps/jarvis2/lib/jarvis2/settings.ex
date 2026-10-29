@@ -14,7 +14,6 @@ defmodule Jarvis2.Settings do
     "agent_spawn" => "Start sibling agents (MCP)",
     "run_command" => "Run shell commands in a new sibling pane (MCP)",
     "test_loop" => "Run mix test after an agent's turn and prompt it about failures",
-    "declarative_layout" => "Create the developer layout tab",
     "sidebar_tokens" => "Show agent status in Herdr's sidebar",
     "pane_hygiene" => "Tidy sidebar tokens when panes change",
     "output_watcher" => "Notify when watched pane output matches",

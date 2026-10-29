@@ -201,9 +201,6 @@ defmodule Jarvis2.MCP.Tools do
   def call("wait_for_event", args, _caller),
     do: EventWait.wait(value(args, :match), value(args, :timeout_s))
 
-  def call("apply_layout", args, caller),
-    do: Fleet.apply_layout(value(args, :name), caller)
-
   def call("run_mix", args, caller),
     do: Runs.run_mix(value(args, :task), value(args, :project), parent_run_id: caller[:run_id])
 

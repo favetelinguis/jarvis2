@@ -36,6 +36,35 @@ window.addEventListener("DOMContentLoaded", () => {
         })
       }
     },
+    // Fetch in the authenticated parent: a sandboxed iframe has an opaque origin and may not send the session cookie.
+    SlidesPreview: {
+      mounted() { this.loadDeck() },
+      updated() { this.loadDeck() },
+      destroyed() { this.controller?.abort() },
+      async loadDeck() {
+        const url = this.el.dataset.url
+        if (url === this.deckUrl) return
+        this.deckUrl = url
+        this.controller?.abort()
+        const controller = this.controller = new AbortController()
+        const frame = this.el.querySelector("iframe")
+        const error = this.el.querySelector(".banner-warn")
+        error.hidden = true
+        frame.removeAttribute("src")
+        try {
+          const response = await fetch(url, {credentials: "same-origin", redirect: "error", signal: controller.signal})
+          if (!response.ok || !response.headers.get("content-type")?.startsWith("text/html")) throw new Error("preview unavailable")
+          const html = await response.text()
+          if (controller.signal.aborted) return
+          // Opaque sandboxed blob: documents cannot reliably navigate their own hash in Chromium.
+          frame.src = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+        } catch (_) {
+          if (controller.signal.aborted) return
+          this.deckUrl = null
+          error.hidden = false
+        }
+      }
+    },
     Copy: {
       mounted() {
         this.el.querySelector("button").addEventListener("click", async () => {

@@ -2,6 +2,14 @@ defmodule Jarvis2Web.KanbanLiveTest do
   use Jarvis2Web.ConnCase, async: false
   alias Jarvis2.{Kanban, Repo, Runs}
 
+  defmodule Mirror do
+    use GenServer
+    def start_link(_), do: GenServer.start_link(__MODULE__, nil)
+    def init(_), do: {:ok, %{stale: false, snapshot: %{}}}
+    def handle_call(:get, _, state), do: {:reply, state, state}
+    def handle_cast(:invalidate, state), do: {:noreply, state}
+  end
+
   setup %{conn: conn}, do: %{conn: sign_in(conn)}
 
   test "requires a session and adds cards", %{conn: conn} do
@@ -15,6 +23,82 @@ defmodule Jarvis2Web.KanbanLiveTest do
     render_hook(view, "move_card", %{id: card.id, to: "done"})
     assert_reply view, %{ok: false}
     assert Kanban.get_card(card.id).column == :scratch
+  end
+
+  test "worktree form lists branches and remains usable when Herdr is unavailable", %{conn: conn} do
+    path = Path.join(System.tmp_dir!(), "j2-ui-#{System.unique_integer([:positive])}.sock")
+    parent = self()
+
+    handler = fn request ->
+      send(parent, {:worktree_request, request["params"]["cwd"]})
+
+      if request["params"]["cwd"] == "/unavailable" do
+        {:reply, %{error: %{code: "disconnected", message: "offline"}}}
+      else
+        {:reply,
+         %{
+           result: %{
+             worktrees: [
+               %{path: "/repo", branch: "master", is_linked_worktree: false},
+               %{path: "/linked", branch: "feature/x", is_linked_worktree: true}
+             ]
+           }
+         }}
+      end
+    end
+
+    {:ok, _, listener} = Jarvis2.Test.FakeHerdr.start_link(path, handler)
+    {:ok, socket} = start_supervised({Jarvis2.Herdr.Socket, [name: nil, path: path]})
+    old = Application.fetch_env(:jarvis2, :herdr_socket)
+    Application.put_env(:jarvis2, :herdr_socket, socket)
+
+    on_exit(fn ->
+      :gen_tcp.close(listener)
+      File.rm(path)
+
+      case old do
+        {:ok, value} -> Application.put_env(:jarvis2, :herdr_socket, value)
+        :error -> Application.delete_env(:jarvis2, :herdr_socket)
+      end
+    end)
+
+    {:ok, view, _} = live(conn, "/kanban")
+    render_async(view)
+    assert has_element?(view, ~s(#card_worktree[value="main"]))
+    assert has_element?(view, ~s(#worktree-options option[value="feature/x"]))
+    assert render(view) =~ "Uses the main checkout"
+
+    view
+    |> form("#card-form", card: %{title: "test", cwd: File.cwd!(), worktree: "feature/x"})
+    |> render_change()
+
+    assert render(view) =~ "Opens existing worktree feature/x"
+
+    view
+    |> form("#card-form", card: %{title: "test", cwd: File.cwd!(), worktree: "new"})
+    |> render_change()
+
+    assert render(view) =~ "Creates worktree new on first run"
+
+    view
+    |> form("#card-form", card: %{title: "test", cwd: File.cwd!(), worktree: ""})
+    |> render_change()
+
+    assert has_element?(view, ".field-error", "can't be blank")
+
+    view
+    |> form("#card-form", card: %{title: "test", cwd: "/unavailable", worktree: "new"})
+    |> render_change()
+
+    render_async(view)
+    assert render(view) =~ "Herdr unavailable; worktrees cannot be listed"
+
+    view
+    |> form("#card-form", card: %{title: "test", cwd: File.cwd!(), worktree: "new"})
+    |> render_submit()
+
+    assert hd(Kanban.list_cards()).worktree == "new"
+    assert has_element?(view, ~s(#card_worktree[value="main"]))
   end
 
   test "card details retain their browser-controlled open state during form updates", %{
@@ -67,6 +151,49 @@ defmodule Jarvis2Web.KanbanLiveTest do
     {:ok, detail, _} = live(conn, "/kanban/cards/#{card.id}")
     assert has_element?(detail, "#deliverable-#{card.id}[phx-hook=Copy] button", "Copy")
     assert has_element?(detail, "#deliverable-#{card.id} pre", "Goal: useful")
+  end
+
+  test "accept plan is only shown for the planning deliverable and reports errors", %{conn: conn} do
+    dir = Path.join(System.tmp_dir!(), "jarvis2-ui-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    {:ok, run} = Runs.create_run(%{name: "planner", task: "test", cwd: dir})
+    {:ok, card} = Kanban.create_card(%{title: "Idea", cwd: dir})
+    card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+    {:ok, view, _} = live(conn, "/kanban/cards/#{card.id}")
+    refute has_element?(view, "button[phx-click=advance]")
+    {:ok, _} = Kanban.submit_deliverable(run.id, "the plan")
+    assert has_element?(view, "button[phx-click=advance]", "Accept plan")
+    assert has_element?(view, ".stage-badge", "Planning")
+
+    old = Application.fetch_env(:jarvis2, :mirror)
+    old_socket = Application.fetch_env(:jarvis2, :herdr_socket)
+    Application.put_env(:jarvis2, :herdr_socket, :missing_kanban_ui_socket)
+    Application.put_env(:jarvis2, :mirror, :missing_kanban_ui_mirror)
+
+    on_exit(fn ->
+      case old do
+        {:ok, value} -> Application.put_env(:jarvis2, :mirror, value)
+        :error -> Application.delete_env(:jarvis2, :mirror)
+      end
+
+      case old_socket do
+        {:ok, value} -> Application.put_env(:jarvis2, :herdr_socket, value)
+        :error -> Application.delete_env(:jarvis2, :herdr_socket)
+      end
+    end)
+
+    view |> element("button[phx-click=advance]") |> render_click()
+    assert render(view) =~ "Herdr is not connected"
+    assert Kanban.get_card(card.id).column == :done
+    {:ok, mirror} = start_supervised(Mirror)
+    Application.put_env(:jarvis2, :mirror, mirror)
+    view |> element("button[phx-click=advance]") |> render_click()
+    assert Kanban.get_card(card.id).stage == :implementation
+    assert has_element?(view, "[data-column=agent] .stage-badge", "Implementation")
+    assert has_element?(view, "#card-panel", "Accepted plan")
+    refute has_element?(view, "button[phx-click=advance]")
+    assert File.read!(Path.join(dir, "PLAN.md")) == "the plan"
   end
 
   test "does not log card ideas entered in LiveView", %{conn: conn} do
@@ -200,6 +327,30 @@ defmodule Jarvis2Web.KanbanLiveTest do
     assert has_element?(reloaded, ~s(input[value="because"]))
     {:ok, _} = Kanban.submit_deliverable(run.id, "plan")
     assert has_element?(reloaded, "#card-panel", "This round is no longer open.")
+  end
+
+  test "slides preview remains stable across refresh and is available on reopen", %{conn: conn} do
+    html = "<!doctype html><html><head></head><body>Secret deck</body></html>"
+    {:ok, card} = Kanban.create_card(%{title: "Deck", kind: :slides, cwd: File.cwd!()})
+    card = card |> Ecto.Changeset.change(column: :done, deliverable: html) |> Repo.update!()
+    {:ok, view, _} = live(conn, "/kanban/cards/#{card.id}")
+    src = "/kanban/cards/#{card.id}/slides?v=#{:erlang.phash2(html)}"
+
+    assert has_element?(
+             view,
+             ~s([phx-hook="SlidesPreview"][phx-update="ignore"][data-url="#{src}"] iframe.slides-frame[sandbox="allow-scripts"])
+           )
+
+    refute has_element?(view, "iframe.slides-frame[src]")
+    assert has_element?(view, ~s(a[href="/kanban/cards/#{card.id}/slides?download=1"]), "Save")
+    refute has_element?(view, "#card-panel pre")
+    refute render(view) =~ "Secret deck"
+    refute render(view) =~ "allow-same-origin"
+    Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, Kanban.topic(), {:card, card})
+    assert has_element?(view, ~s([phx-hook="SlidesPreview"][data-url="#{src}"]))
+    {:ok, reopen, _} = live(conn, "/kanban/cards/#{card.id}/reopen")
+    assert has_element?(reopen, ~s([phx-hook="SlidesPreview"][data-url="#{src}"]))
+    refute has_element?(reopen, "#card-panel pre")
   end
 
   test "dropping a done card opens reopen without moving it", %{conn: conn} do

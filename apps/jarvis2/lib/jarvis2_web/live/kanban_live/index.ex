@@ -5,6 +5,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
   alias Phoenix.LiveView.JS
   alias Jarvis2.{Kanban, Runs}
   alias Jarvis2.Kanban.{Card, Kind}
+  alias Jarvis2.Herdr.Workspaces
 
   @columns [
     {:scratch, "Scratch"},
@@ -25,8 +26,16 @@ defmodule Jarvis2Web.KanbanLive.Index do
 
     {:ok,
      socket
-     |> assign(columns: @columns, card: nil, feedback: "")
-     |> assign_form(Kanban.change_card(%Card{}, %{cwd: cwd}))
+     |> assign(
+       columns: @columns,
+       card: nil,
+       feedback: "",
+       worktrees: [],
+       worktree_error: false,
+       worktree_cwd: nil
+     )
+     |> assign_form(Kanban.change_card(%Card{}, %{cwd: cwd, worktree: "main"}))
+     |> lookup_worktrees(cwd)
      |> load()}
   end
 
@@ -51,14 +60,21 @@ defmodule Jarvis2Web.KanbanLive.Index do
   @impl true
   def handle_event("validate", %{"card" => attrs}, socket) do
     changeset = Kanban.change_card(%Card{}, attrs)
-    {:noreply, assign_form(socket, %{changeset | action: :validate})}
+
+    {:noreply,
+     socket |> assign_form(%{changeset | action: :validate}) |> lookup_worktrees(attrs["cwd"])}
   end
 
   def handle_event("create", %{"card" => attrs}, socket) do
     case Kanban.create_card(attrs) do
       {:ok, _} ->
         cwd = Application.get_env(:jarvis2, :mix_project_dir, File.cwd!())
-        {:noreply, socket |> assign_form(Kanban.change_card(%Card{}, %{cwd: cwd})) |> load()}
+
+        {:noreply,
+         socket
+         |> assign_form(Kanban.change_card(%Card{}, %{cwd: cwd, worktree: "main"}))
+         |> lookup_worktrees(cwd)
+         |> load()}
 
       {:error, changeset} ->
         {:noreply, assign_form(socket, changeset)}
@@ -97,6 +113,16 @@ defmodule Jarvis2Web.KanbanLive.Index do
     end
   end
 
+  def handle_event("advance", _, %{assigns: %{card: nil}} = socket),
+    do: {:noreply, put_flash(socket, :error, "Card not found.")}
+
+  def handle_event("advance", _, socket) do
+    case Kanban.advance(socket.assigns.card) do
+      {:ok, _} -> {:noreply, refresh(socket)}
+      {:error, message} -> {:noreply, socket |> put_flash(:error, message) |> refresh()}
+    end
+  end
+
   def handle_event("retry", %{"id" => id}, socket) do
     case Kanban.get_card(id) do
       nil ->
@@ -109,6 +135,13 @@ defmodule Jarvis2Web.KanbanLive.Index do
         end
     end
   end
+
+  @impl true
+  def handle_async(:worktrees, {:ok, {:ok, trees}}, socket),
+    do: {:noreply, assign(socket, worktrees: trees, worktree_error: false)}
+
+  def handle_async(:worktrees, _result, socket),
+    do: {:noreply, assign(socket, worktrees: [], worktree_error: true)}
 
   @impl true
   def handle_info({:card, _}, socket), do: {:noreply, refresh(socket)}
@@ -127,6 +160,28 @@ defmodule Jarvis2Web.KanbanLive.Index do
 
   defp assign_form(socket, changeset), do: assign(socket, form: to_form(changeset, as: :card))
 
+  defp lookup_worktrees(socket, cwd) do
+    if connected?(socket) and is_binary(cwd) and cwd != socket.assigns.worktree_cwd do
+      socket
+      |> cancel_async(:worktrees)
+      |> assign(worktree_cwd: cwd, worktrees: [], worktree_error: false)
+      |> start_async(:worktrees, fn -> Workspaces.list_worktrees(cwd) end)
+    else
+      socket
+    end
+  end
+
+  defp worktree_hint(form, trees) do
+    value = form[:worktree].value
+
+    cond do
+      value == "main" -> "Uses the main checkout"
+      not is_binary(value) or value == "" -> nil
+      Enum.any?(trees, &(!&1.main? and &1.branch == value)) -> "Opens existing worktree #{value}"
+      true -> "Creates worktree #{value} on first run"
+    end
+  end
+
   defp kind_hint(form) do
     kind = Ecto.Changeset.get_field(form.source, :kind) || :plan
     Kind.get(kind).hint
@@ -143,6 +198,33 @@ defmodule Jarvis2Web.KanbanLive.Index do
   defp status(run), do: run.status
   defp detail_path(%Card{column: :awaiting_user, id: id}), do: "/kanban/cards/#{id}/answer"
   defp detail_path(%Card{id: id}), do: "/kanban/cards/#{id}"
+
+  defp slides_viewer(assigns) do
+    ~H"""
+    <div
+      id={"deck-preview-#{@card.id}"}
+      phx-hook="SlidesPreview"
+      phx-update="ignore"
+      data-url={"/kanban/cards/#{@card.id}/slides?v=#{:erlang.phash2(@card.deliverable)}"}
+    >
+      <iframe
+        id={"deck-#{@card.id}"}
+        class="slides-frame"
+        sandbox="allow-scripts"
+        allow="fullscreen"
+        allowfullscreen
+        title={@card.title}
+      ></iframe>
+      <p class="banner banner-warn" hidden>
+        Could not load the slide preview. Sign in again or reload the page.
+      </p>
+    </div>
+    <div class="actions">
+      <a class="button" href={"/kanban/cards/#{@card.id}/slides?download=1"}>Save</a>
+      <a href={"/kanban/cards/#{@card.id}/slides"} target="_blank" rel="noopener">Open in new tab</a>
+    </div>
+    """
+  end
 
   @impl true
   def render(assigns) do
@@ -182,6 +264,27 @@ defmodule Jarvis2Web.KanbanLive.Index do
             <.field field={@form[:body]} type="textarea" label="Idea" placeholder={kind_hint(@form)} />
             <small>{kind_hint(@form)}</small>
             <.field field={@form[:cwd]} label="Working directory" required />
+            <label>
+              Worktree
+              <input
+                id={@form[:worktree].id}
+                name={@form[:worktree].name}
+                value={@form[:worktree].value}
+                list="worktree-options"
+                required
+              />
+              <.errors field={@form[:worktree]} />
+            </label>
+            <datalist id="worktree-options">
+              <option value="main" />
+              <option
+                :for={tree <- @worktrees}
+                :if={!tree.main? && is_binary(tree.branch) && tree.branch != "main"}
+                value={tree.branch}
+              />
+            </datalist>
+            <small :if={hint = worktree_hint(@form, @worktrees)}>{hint}</small>
+            <small :if={@worktree_error}>Herdr unavailable; worktrees cannot be listed</small>
           </details>
           <button type="submit">Add card</button>
         </.form>
@@ -196,6 +299,9 @@ defmodule Jarvis2Web.KanbanLive.Index do
         >
           <.link patch={detail_path(card)}>{card.title}</.link>
           <span class="badge kind-badge">{Kind.get(card.kind).label}</span>
+          <span :if={length(Kind.stages(card.kind)) > 1} class="badge stage-badge">
+            {card.stage |> Atom.to_string() |> String.capitalize()}
+          </span>
           <.status_badge :if={card.run} status={status(card.run)} />
           <span :if={column == :archive} class="badge">{if card.run && card.run.kind == "pi" &&
                                                              card.run.session_id,
@@ -224,7 +330,12 @@ defmodule Jarvis2Web.KanbanLive.Index do
           />
         <% :reopen -> %>
           <h3 :if={@card.column == :archive}>Restore from archive</h3>
-          <h3>Current {Kind.noun(@card.kind)}</h3><pre>{@card.deliverable}</pre>
+          <h3>Current {Kind.noun(@card.kind, @card.stage)}</h3>
+          <%= if @card.deliverable && Kind.deliverable_type(@card.kind) == :html && @card.column in [:done, :archive] do %>
+            <.slides_viewer card={@card} />
+          <% else %>
+            <pre :if={Kind.deliverable_type(@card.kind) != :html}>{@card.deliverable}</pre>
+          <% end %>
           <.form for={%{}} id="reopen-form" phx-change="feedback" phx-submit="reopen">
             <label>What should change? <textarea name="feedback" required>{@feedback}</textarea></label>
             <span>{byte_size(@feedback)} / 1000 bytes</span>
@@ -233,6 +344,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
           </.form>
         <% _ -> %>
           <p>{@card.body}</p><p>Working directory: <code>{@card.cwd}</code></p>
+          <p>Worktree: <code>{@card.worktree}</code></p>
           <section :for={round <- Enum.sort_by(@card.rounds, & &1.number)}>
             <h3>Round {round.number} ({round.status})</h3>
             <div :for={q <- round.questions}>
@@ -246,11 +358,26 @@ defmodule Jarvis2Web.KanbanLive.Index do
           <section :for={feedback <- @card.feedback}>
             <h3>Reopen feedback</h3><p>{feedback.text}</p>
           </section>
+          <section :if={@card.accepted_plan}>
+            <h3>Accepted plan</h3><pre>{@card.accepted_plan}</pre>
+          </section>
           <section :if={@card.deliverable}>
-            <h3>{String.capitalize(Kind.noun(@card.kind))}</h3>
-            <div id={"deliverable-#{@card.id}"} phx-hook="Copy">
-              <button type="button">Copy</button><pre>{@card.deliverable}</pre>
-            </div>
+            <h3>{String.capitalize(Kind.noun(@card.kind, @card.stage))}</h3>
+            <%= if Kind.deliverable_type(@card.kind) == :html do %>
+              <.slides_viewer :if={@card.column in [:done, :archive]} card={@card} />
+            <% else %>
+              <div id={"deliverable-#{@card.id}"} phx-hook="Copy">
+                <button type="button">Copy</button><pre>{@card.deliverable}</pre>
+              </div>
+            <% end %>
+            <button
+              :if={@card.column == :done && Kind.stage(@card.kind, @card.stage).advance}
+              type="button"
+              phx-click="advance"
+              data-confirm={"Write PLAN.md to #{@card.run && @card.run.cwd} and start an implementer?"}
+            >
+              {Kind.stage(@card.kind, @card.stage).advance.label}
+            </button>
           </section>
       <% end %>
     </aside>

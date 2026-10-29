@@ -51,10 +51,25 @@ defmodule Jarvis2.KanbanTest do
     end
   end
 
+  test "worktree defaults, validates, trims and cannot be changed" do
+    assert card().worktree == "main"
+    attrs = %{title: "x", cwd: File.cwd!()}
+
+    for bad <- ["", "   ", "-bad", "a..b", "a b", "a/", "a.lock", String.duplicate("x", 101)] do
+      assert {:error, changeset} = Kanban.create_card(Map.put(attrs, :worktree, bad))
+      assert changeset.errors[:worktree]
+    end
+
+    assert {:ok, card} = Kanban.create_card(Map.put(attrs, :worktree, "  feature/x  "))
+    assert card.worktree == "feature/x"
+    assert {:error, _} = card |> Card.changeset(%{worktree: "other"}) |> Repo.update()
+    assert Kanban.get_card(card.id).worktree == "feature/x"
+  end
+
   test "card kinds have independent input and question limits" do
     assert card().kind == :plan
 
-    for kind <- [:plan, :research, :explain, :review, :refine] do
+    for kind <- [:plan, :research, :explain, :review, :refine, :slides] do
       limit = if kind == :plan, do: 2_000, else: 4_000
 
       attrs = %{
@@ -71,13 +86,82 @@ defmodule Jarvis2.KanbanTest do
 
     assert {:error, _} = Kanban.create_card(%{title: "x", cwd: File.cwd!(), kind: "unknown"})
 
-    for {kind, max} <- [plan: 8, research: 4, explain: 2, review: 3, refine: 4] do
+    for {kind, max} <- [plan: 8, research: 4, explain: 2, review: 3, refine: 4, slides: 4] do
       {:ok, card} = Kanban.create_card(%{title: "x", cwd: File.cwd!(), kind: kind})
       {:ok, run} = Runs.create_run(%{name: "test", task: "test", cwd: card.cwd})
       card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
       assert {:error, _} = Kanban.ask_questions(run.id, List.duplicate(question(), max + 1))
       assert {:ok, _} = Kanban.ask_questions(run.id, List.duplicate(question(), max))
     end
+  end
+
+  test "stages are assigned by kind and cannot be supplied by the caller" do
+    for kind <- Jarvis2.Kanban.Kind.all() do
+      {:ok, card} =
+        Kanban.create_card(%{title: "x", cwd: File.cwd!(), kind: kind, stage: :implementation})
+
+      assert card.stage == if(kind == :plan, do: :planning, else: :main)
+    end
+  end
+
+  test "implementation prompts omit planning context and refer to PLAN.md" do
+    card = %{
+      card()
+      | stage: :implementation,
+        accepted_plan: String.duplicate("secret plan", 2_000),
+        deliverable: "old report"
+    }
+
+    round = %Jarvis2.Kanban.Round{
+      number: 1,
+      status: :answered,
+      questions: [%{"id" => "Q1", "title" => "Planning secret"}],
+      answers: %{"Q1" => %{"kind" => "custom", "text" => "secret", "note" => ""}}
+    }
+
+    prompt = Jarvis2.Kanban.Prompt.build(card, [round])
+    assert prompt =~ "PLAN.md"
+    assert prompt =~ "implementation report"
+    refute prompt =~ "Do not edit files"
+    refute prompt =~ "Planning secret"
+    refute prompt =~ "secret plan"
+    refute prompt =~ "old report"
+    assert byte_size(prompt) <= 6_000
+
+    started = DateTime.utc_now()
+    planning = %{round | inserted_at: DateTime.add(started, -1, :second)}
+
+    implementation = %{
+      round
+      | inserted_at: DateTime.add(started, 1, :second),
+        questions: [%{"id" => "Q1", "title" => "Implementation decision"}]
+    }
+
+    card = %{
+      card
+      | stage_started_at: started,
+        feedback: [
+          %Jarvis2.Kanban.Feedback{
+            text: "old planning feedback",
+            inserted_at: DateTime.add(started, -1, :second)
+          },
+          %Jarvis2.Kanban.Feedback{
+            text: "implementation feedback",
+            inserted_at: DateTime.add(started, 1, :second)
+          }
+        ]
+    }
+
+    restored =
+      Jarvis2.Kanban.Prompt.build(card, [planning, implementation], "continue", restored: true)
+
+    assert restored =~ "Implementation decision"
+    assert restored =~ "implementation feedback"
+    refute restored =~ "Planning secret"
+    refute restored =~ "old planning feedback"
+    assert byte_size(restored) <= 6_000
+    assert Jarvis2.Kanban.Prompt.reopen("fix", :plan, :implementation) =~ "implementation report"
+    assert Jarvis2.Kanban.Prompt.answers(round, :implementation) =~ "implementation report"
   end
 
   test "a persisted card cannot change kind" do
@@ -98,6 +182,36 @@ defmodule Jarvis2.KanbanTest do
 
     {_card, plan_run} = agent_card()
     assert {:ok, _} = Kanban.submit_deliverable(plan_run.id, String.duplicate("p", 20_000))
+  end
+
+  test "slides validate deliverables and keep deck HTML out of bounded prompts" do
+    {:ok, card} =
+      Kanban.create_card(%{
+        title: "Deck",
+        cwd: File.cwd!(),
+        kind: :slides,
+        body: String.duplicate("b", 4_000)
+      })
+
+    assert card.stage == :main
+    {:ok, run} = Runs.create_run(%{name: "test", task: "test", cwd: card.cwd})
+    card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+    assert {:error, _} = Kanban.submit_deliverable(run.id, "# markdown")
+    assert {:error, message} = Kanban.submit_deliverable(run.id, String.duplicate("x", 200_001))
+    assert message =~ "200000"
+    assert Kanban.get_card(card.id).column == :agent
+
+    html =
+      "<!doctype html><html><head></head><body>" <>
+        String.duplicate("z", 10_000) <> "</body></html>"
+
+    assert {:ok, _} = Kanban.submit_deliverable(run.id, html)
+    card = Kanban.get_card(card.id)
+    assert card.column == :done
+    prompt = Jarvis2.Kanban.Prompt.build(card, [], String.duplicate("f", 1_000), restored: true)
+    assert byte_size(prompt) <= 6_000
+    assert prompt =~ Jarvis2.Kanban.Slides.path(card.id)
+    refute prompt =~ html
   end
 
   test "rounds are numbered across the card, save drafts and refuse incomplete answers" do
@@ -220,6 +334,7 @@ defmodule Jarvis2.KanbanTest do
       card = %{
         card()
         | kind: kind,
+          stage: Jarvis2.Kanban.Kind.initial_stage(kind),
           title: String.duplicate("t", 120),
           body: body,
           deliverable: String.duplicate("é", 10_000)

@@ -1,15 +1,14 @@
 defmodule Jarvis2.Runs.Launcher do
   @moduledoc """
-  Performs the Herdr side of a run: create a tab in the anchor workspace, start the agent in it and
+  Performs the Herdr side of a run: create a tab in the checkout workspace, start the agent in it and
   deliver the task. The UI acts as the named system caller `ui` through the execution and prompt guards.
   """
   require Logger
 
   alias Jarvis2.Fleet
-  alias Jarvis2.Herdr.{Actions, ExecutionGuard, Mirror, Socket}
+  alias Jarvis2.Herdr.{Actions, ExecutionGuard, Mirror, Socket, Workspaces}
   alias Jarvis2.Runs.Run
 
-  @workspace_label "jarvis2"
   @pi_extension "/home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js"
   @ui %{system: "ui", pane: "system:ui"}
   @prompt_wait_ms 15_000
@@ -41,12 +40,12 @@ defmodule Jarvis2.Runs.Launcher do
   def agent_args(_run), do: []
 
   @doc "Starts the run's agent. Returns the details to store on the run."
-  def start(%Run{} = run, label \\ nil) do
+  def start(%Run{} = run, label \\ nil, placement \\ :tab) do
     guard = Application.get_env(:jarvis2, :execution_guard, ExecutionGuard)
 
     case ExecutionGuard.reserve(caller(run), guard) do
       {:ok, _verified, lease} ->
-        result = guarded(fn -> execute(run, label) end)
+        result = guarded(fn -> execute(run, label, placement) end)
 
         ExecutionGuard.finish(
           lease,
@@ -137,15 +136,19 @@ defmodule Jarvis2.Runs.Launcher do
 
   def find(_run, _view), do: nil
 
-  defp execute(run, label) do
+  defp execute(run, label, placement) do
     with {:ok, view} <- fresh(current_view()),
-         {:ok, anchor} <- ensure_anchor(view),
-         {:ok, pane, tab_id} <- create_tab(run, anchor, label),
+         {:ok, workspace} <- Workspaces.resolve(run.cwd, run.worktree),
+         run = %{run | cwd: workspace.checkout_path},
+         {:ok, pane, tab_id} <- create_pane(run, view, workspace.workspace_id, label, placement),
+         :ok <- close_fresh_tabs(workspace.fresh_tab_ids),
          :ok <- shell_ready(pane),
          {:ok, _agent} <- start_agent(run, pane) do
       {:ok,
        %{
          tab_id: tab_id,
+         workspace_id: workspace.workspace_id,
+         cwd: workspace.checkout_path,
          pane_id: pane["pane_id"],
          terminal_id: pane["terminal_id"],
          agent_name: agent_name(run),
@@ -154,34 +157,66 @@ defmodule Jarvis2.Runs.Launcher do
     end
   end
 
-  defp ensure_anchor(view) do
-    case anchor(view) do
-      {:ok, pane} -> {:ok, pane}
-      {:error, :no_anchor} -> create_anchor()
-      error -> error
+  defp close_fresh_tabs(tabs) do
+    Enum.each(tabs, fn tab ->
+      case close_tab(tab) do
+        {:ok, _} -> :ok
+        {:error, _} -> Logger.warning("Could not close a fresh workspace tab")
+      end
+    end)
+
+    :ok
+  end
+
+  defp create_pane(run, _view, workspace_id, label, :tab),
+    do: create_tab(run, workspace_id, label)
+
+  defp create_pane(run, view, workspace_id, label, {:split, pane_id, tab_id}) do
+    panes = view.snapshot["panes"] || []
+
+    if Enum.any?(
+         panes,
+         &(&1["pane_id"] == pane_id and &1["tab_id"] == tab_id and
+             &1["workspace_id"] == workspace_id)
+       ) do
+      split_pane(run, pane_id, tab_id)
+    else
+      create_pane(run, view, workspace_id, label, :tab)
     end
   end
 
-  defp create_anchor do
+  defp split_pane(run, pane_id, tab_id) do
     params = %{
-      label: @workspace_label,
-      cwd: Application.get_env(:jarvis2, :mix_project_dir, File.cwd!()),
-      focus: false
+      target_pane_id: pane_id,
+      direction: "right",
+      cwd: run.cwd,
+      focus: false,
+      env: env(run)
     }
 
-    case Socket.request("workspace.create", params, server: socket(), timeout: 5_000) do
-      {:ok, %{"root_pane" => %{"pane_id" => id} = pane}} when is_binary(id) and id != "" ->
-        Mirror.invalidate(mirror())
-        {:ok, pane}
+    result = Socket.request("pane.split", params, server: socket(), timeout: 5_000)
+    Logger.info("Herdr live run pane.split outcome=#{outcome(result)}")
+
+    case result do
+      {:ok,
+       %{
+         "type" => "pane_info",
+         "pane" => %{"pane_id" => id, "terminal_id" => terminal, "tab_id" => ^tab_id} = pane
+       }}
+      when is_binary(id) and id != "" and is_binary(terminal) and terminal != "" ->
+        {:ok, pane, tab_id}
+
+      {:error, %{code: code}} when code not in ["timeout", "disconnected"] ->
+        {:error, "Herdr rejected the new pane (#{code})."}
 
       _ ->
-        {:error, "Could not create the jarvis2 workspace; inspect the session before retrying."}
+        {:error, "A pane may have been created; inspect the workspace before retrying."}
     end
   end
 
-  defp create_tab(run, anchor, label) do
+  defp create_tab(run, workspace_id, label) do
     params = %{
-      workspace_id: anchor["workspace_id"],
+      workspace_id: workspace_id,
       label: String.slice(label || String.replace(run.task, ~r/\s+/, " "), 0, 32),
       cwd: run.cwd,
       focus: false,
@@ -297,16 +332,6 @@ defmodule Jarvis2.Runs.Launcher do
   catch
     :exit, _ -> {:error, "Herdr became unavailable during the launch; inspect the workspace."}
   end
-
-  @doc false
-  def anchor(%{snapshot: %{"panes" => panes, "workspaces" => workspaces}})
-      when is_list(panes) and is_list(workspaces) do
-    workspace = Enum.find(workspaces, &(&1["label"] == @workspace_label))
-    pane = workspace && Enum.find(panes, &(&1["workspace_id"] == workspace["workspace_id"]))
-    if pane, do: {:ok, pane}, else: {:error, :no_anchor}
-  end
-
-  def anchor(_view), do: {:error, "Herdr is not connected."}
 
   defp fresh(%{stale: false, snapshot: snapshot} = view) when is_map(snapshot), do: {:ok, view}
   defp fresh(_), do: {:error, "Herdr is not connected or its state is stale."}

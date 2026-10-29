@@ -25,12 +25,6 @@ defmodule Jarvis2.Fleet do
     |> audit("fleet.run_command", caller, args, opts)
   end
 
-  def apply_layout(name, caller, opts \\ []) do
-    name
-    |> Jarvis2.Layouts.Dev.create(caller)
-    |> audit("fleet.apply_layout", caller, %{name: name}, opts)
-  end
-
   @doc "Writes a `fleet.*` event for an attempted change and returns `result` untouched."
   def audit(result, type, caller, payload, opts) do
     Journal.record(%{

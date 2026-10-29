@@ -1,9 +1,7 @@
 defmodule Jarvis2Web.DashboardLive do
   use Jarvis2Web, :live_view
 
-  alias Jarvis2.Fleet
   alias Jarvis2.Herdr.Mirror
-  alias Jarvis2.Runs.Launcher
   alias Jarvis2.Journal
 
   @event_limit 50
@@ -22,25 +20,6 @@ defmodule Jarvis2Web.DashboardLive do
   end
 
   @impl true
-  def handle_event("apply_layout", _params, socket) do
-    with {:ok, pane} <- Launcher.anchor(socket.assigns.view),
-         caller = %{pane: pane["pane_id"], workspace: pane["workspace_id"]},
-         {:ok, _result} <- Fleet.apply_layout("dev", caller, source: :ui) do
-      {:noreply, put_flash(socket, :info, "Dev layout created.")}
-    else
-      {:error, :no_anchor} ->
-        {:noreply,
-         put_flash(socket, :error, "Start a run first to create the jarvis2 workspace.")}
-
-      {:error, message} when is_binary(message) ->
-        {:noreply, put_flash(socket, :error, message)}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "The layout could not be created.")}
-    end
-  end
-
-  @impl true
   def handle_info({:jarvis2, "mirror:updated", %{source: source, view: view}}, socket) do
     if source == GenServer.whereis(mirror()),
       do: {:noreply, assign(socket, :view, view)},
@@ -56,9 +35,6 @@ defmodule Jarvis2Web.DashboardLive do
   def render(assigns) do
     ~H"""
     <h1>Dashboard</h1>
-    <p class="actions">
-      <button type="button" phx-click="apply_layout" id="apply-layout">Apply dev layout</button>
-    </p>
     <div class={["banner", connection(@view) != :online && "banner-warn"]} id="connection">
       <span>{connection_text(connection(@view))}</span>
       <span :if={diff = @view[:layout_diff]} class="muted">

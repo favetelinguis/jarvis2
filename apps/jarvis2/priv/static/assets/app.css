@@ -48,6 +48,8 @@ label.check { display: flex; gap: .6rem; align-items: baseline; }
 .kanban-panel { margin-top: 1rem; padding: 1rem; border: 1px solid #8886; border-radius: .5rem; }
 .kanban-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .kanban-panel textarea { width: min(100%, 40rem); min-height: 6rem; }
+.slides-frame { width: 100%; aspect-ratio: 16/9; max-height: 80vh; border: 1px solid #8886; border-radius: .5rem; background: #fff; }
+
 .kanban-panel .question-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .kanban-panel .answer-choices { display: flex; flex-wrap: wrap; gap: .4rem; }
 .kanban-panel .answer-choices button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }

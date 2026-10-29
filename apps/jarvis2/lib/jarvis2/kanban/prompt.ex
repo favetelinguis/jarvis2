@@ -1,27 +1,45 @@
 defmodule Jarvis2.Kanban.Prompt do
   @moduledoc false
 
-  alias Jarvis2.Kanban.Kind
+  alias Jarvis2.Kanban.{Kind, Slides}
 
-  def build(card, rounds \\ [], feedback \\ nil, opts \\ []) do
+  def build(card, rounds \\ [], feedback \\ nil, opts \\ [])
+
+  def build(%{stage: :implementation} = card, rounds, feedback, opts) do
+    prefix =
+      Kind.protocol(card.kind, card.stage) <>
+        "\n\nCard: " <> card.title <> "\nImplement PLAN.md.\n"
+
+    base = prefix <> truncate(feedback_text(feedback, opts), max(0, 6_000 - byte_size(prefix)))
+    prior_feedback = if Ecto.assoc_loaded?(card.feedback), do: card.feedback, else: []
+
+    history =
+      (rounds ++ prior_feedback)
+      |> Enum.filter(&in_stage?(&1, card.stage_started_at))
+      |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
+      |> Enum.map(&history_item(&1, card.stage))
+      |> Enum.reject(&(&1 == ""))
+
+    base <> history_text(history, max(0, 6_000 - byte_size(base)))
+  end
+
+  def build(card, rounds, feedback, opts) do
     prior_feedback = if Ecto.assoc_loaded?(card.feedback), do: card.feedback, else: []
 
     history =
       (rounds ++ prior_feedback)
       |> Enum.sort_by(&(&1.inserted_at || ~U[1970-01-01 00:00:00Z]), {:desc, DateTime})
-      |> Enum.map(&history_item/1)
+      |> Enum.map(&history_item(&1, card.stage))
       |> Enum.reject(&(&1 == ""))
 
-    lead =
-      if opts[:restored],
-        do:
-          "Restored from archive; your earlier conversation was reloaded if it still exists. Reason: ",
-        else: "Reopen feedback: "
+    prefix = Kind.protocol(card.kind, card.stage) <> "\n\nCard: " <> card.title <> "\nIdea: "
 
-    feedback = if feedback, do: lead <> feedback <> "\n", else: ""
+    deck =
+      if card.deliverable && Kind.deliverable_type(card.kind) == :html,
+        do: "\n" <> deck_pointer(card.id) <> "\n",
+        else: ""
 
-    prefix = Kind.protocol(card.kind) <> "\n\nCard: " <> card.title <> "\nIdea: "
-    suffix = "\n" <> feedback
+    suffix = "\n" <> feedback_text(feedback, opts) <> deck
 
     # The full restore reason takes priority when the protocol and maximum-sized body exceed the task cap.
     body_budget = max(0, 6_000 - byte_size(prefix) - byte_size(suffix))
@@ -32,10 +50,10 @@ defmodule Jarvis2.Kanban.Prompt do
     context = history_text(history, history_budget - reserve)
 
     previous =
-      if card.deliverable,
+      if card.deliverable && Kind.deliverable_type(card.kind) != :html,
         do:
           truncate(
-            "\nPrevious " <> Kind.noun(card.kind) <> ":\n" <> card.deliverable,
+            "\nPrevious " <> Kind.noun(card.kind, card.stage) <> ":\n" <> card.deliverable,
             history_budget - byte_size(context)
           ),
         else: ""
@@ -43,7 +61,24 @@ defmodule Jarvis2.Kanban.Prompt do
     base <> context <> previous
   end
 
-  def answers(round) do
+  defp in_stage?(%{inserted_at: %DateTime{} = inserted_at}, %DateTime{} = started_at),
+    do: DateTime.compare(inserted_at, started_at) != :lt
+
+  defp in_stage?(_, _), do: false
+
+  defp feedback_text(nil, _opts), do: ""
+
+  defp feedback_text(feedback, opts) do
+    lead =
+      if opts[:restored],
+        do:
+          "Restored from archive; your earlier conversation was reloaded if it still exists. Reason: ",
+        else: "Reopen feedback: "
+
+    lead <> feedback <> "\n"
+  end
+
+  def answers(round, stage \\ nil) do
     lines =
       Enum.map_join(round.questions, "\n", fn q ->
         answer = round.answers[q["id"]]
@@ -59,24 +94,43 @@ defmodule Jarvis2.Kanban.Prompt do
         q["id"] <> " - " <> q["title"] <> ": " <> response <> note
       end)
 
+    continuation =
+      if stage == :implementation do
+        "Continue implementing PLAN.md, ask_questions if needed, or submit_deliverable with the implementation report."
+      else
+        "Continue: ask the next round if the grilling level allows, or submit_deliverable if nothing is left."
+      end
+
     "Answers to round #{round.number}:\n" <>
-      lines <>
-      "\nContinue: ask the next round if the grilling level allows, or submit_deliverable if nothing is left. Chat output stays minimal."
+      lines <> "\n" <> continuation <> " Chat output stays minimal."
   end
 
-  def reopen(text, kind) do
-    noun = Kind.noun(kind)
+  def reopen(text, kind, stage \\ nil, card_id \\ nil) do
+    noun = Kind.noun(kind, stage || Kind.initial_stage(kind))
+
+    deck =
+      if card_id && Kind.deliverable_type(kind) == :html,
+        do: " " <> deck_pointer(card_id),
+        else: ""
 
     "The human reopened this card with this feedback: " <>
       text <>
-      ". Re-read your #{noun}, ask what is missing or unclear with ask_questions, or submit an updated #{noun}. Chat output stays minimal."
+      ". Re-read your #{noun}, ask what is missing or unclear with ask_questions, or submit an updated #{noun}." <>
+      deck <> " Chat output stays minimal."
   end
 
-  defp history_item(%Jarvis2.Kanban.Round{} = round) do
-    if round.status == :answered and map_size(round.answers) > 0, do: answers(round), else: ""
+  defp deck_pointer(id),
+    do:
+      "Current deck: #{Slides.path(id)}. Read it, apply the feedback, and submit a complete updated document."
+
+  defp history_item(%Jarvis2.Kanban.Round{} = round, stage) do
+    if round.status == :answered and map_size(round.answers) > 0,
+      do: answers(round, stage),
+      else: ""
   end
 
-  defp history_item(%Jarvis2.Kanban.Feedback{text: text}), do: "Earlier feedback: " <> text
+  defp history_item(%Jarvis2.Kanban.Feedback{text: text}, _stage),
+    do: "Earlier feedback: " <> text
 
   defp history_text(items, budget) do
     Enum.reduce_while(items, "", fn item, acc ->

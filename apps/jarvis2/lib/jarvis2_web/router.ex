@@ -11,6 +11,15 @@ defmodule Jarvis2Web.Router do
     plug :put_secure_browser_headers
   end
 
+  pipeline :authenticated do
+    plug Jarvis2Web.Auth
+  end
+
+  scope "/", Jarvis2Web do
+    pipe_through [:browser, :authenticated]
+    get "/kanban/cards/:id/slides", SlidesController, :show
+  end
+
   # The MCP endpoint reads its own request body, so no body parser may run before it.
   match :*, "/mcp", Jarvis2Web.MCPPlug, []
 

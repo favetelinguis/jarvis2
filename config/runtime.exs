@@ -32,7 +32,7 @@ else
   state_dir = System.get_env("JARVIS2_STATE_DIR") || Path.expand("~/.local/state/jarvis2")
 
   known_scenarios =
-    ~w(attention agent_prompt agent_spawn run_command test_loop declarative_layout sidebar_tokens pane_hygiene output_watcher custom_worker)
+    ~w(attention agent_prompt agent_spawn run_command test_loop sidebar_tokens pane_hygiene output_watcher custom_worker)
 
   # Optional lock-down: only these scenarios may ever be enabled from the UI.
   allowed_scenarios =

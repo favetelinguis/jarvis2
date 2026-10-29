@@ -14,6 +14,8 @@ defmodule Jarvis2.Runs.Run do
     field(:model, :string)
     field(:thinking, :string)
     field(:cwd, :string)
+    field(:worktree, :string, default: "main")
+    field(:workspace_id, :string)
     field(:task, :string)
     field(:status, Ecto.Enum, values: @statuses, default: :starting)
     field(:session_id, :string)
@@ -37,8 +39,21 @@ defmodule Jarvis2.Runs.Run do
 
   def changeset(run, attrs) do
     run
-    |> cast(attrs, [:name, :kind, :model, :thinking, :cwd, :task, :parent_run_id, :session_id])
-    |> validate_required([:name, :kind, :model, :thinking, :cwd, :task])
+    |> cast(attrs, [
+      :name,
+      :kind,
+      :model,
+      :thinking,
+      :cwd,
+      :worktree,
+      :task,
+      :parent_run_id,
+      :session_id
+    ])
+    |> validate_required([:name, :kind, :model, :thinking, :cwd, :worktree, :task])
+    |> validate_change(:worktree, fn :worktree, value ->
+      if Jarvis2.Herdr.Workspaces.valid_worktree?(value), do: [], else: [worktree: "is invalid"]
+    end)
     |> validate_length(:name, max: 64)
     |> validate_length(:task, max: 6_000, count: :bytes)
     |> validate_inclusion(:kind, Jarvis2.Herdr.Actions.agent_kinds())
@@ -66,6 +81,8 @@ defmodule Jarvis2.Runs.Run do
   def progress_changeset(run, attrs) do
     cast(run, attrs, [
       :status,
+      :cwd,
+      :workspace_id,
       :tab_id,
       :pane_id,
       :terminal_id,

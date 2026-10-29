@@ -40,8 +40,6 @@ defmodule Jarvis2.MCP.Server do
        task: {:required, {:enum, ["test", "format --check-formatted", "compile"]}},
        project: :string
      }},
-    {"apply_layout", "Create a new developer tab in your workspace.",
-     %{name: {:required, {:enum, ["dev"]}}}},
     {"ask_human",
      "Ask the human a question; returns a ticket. Poll wait_for_answer until it is no longer pending.",
      %{prompt: {:required, :string}, options: {:list, :string}}},
@@ -54,7 +52,8 @@ defmodule Jarvis2.MCP.Server do
     {"ask_questions",
      "Ask a kanban question round, then end your turn; answers arrive as the next message. Each question has title, body, recommended, and options: up to 6 alternative answers as strings of at most 100 bytes each, excluding the recommendation. Provide alternatives whenever applicable; leave options empty only when there are none. Do not number questions.",
      %{questions: {:required, {:list, :map}}}},
-    {"submit_deliverable", "Submit the completed kanban deliverable and end your turn.",
+    {"submit_deliverable",
+     "Submit the completed kanban deliverable and end your turn. For slides, content is one complete self-contained HTML document.",
      %{content: {:required, :string}}},
     {"submit_result", "Finish your run with a summary and optional artifact paths or URLs.",
      %{summary: {:required, :string}, artifacts: {:list, :string}}}

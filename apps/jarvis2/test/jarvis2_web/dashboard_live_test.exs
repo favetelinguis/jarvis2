@@ -92,63 +92,6 @@ defmodule Jarvis2Web.DashboardLiveTest do
     assert has_element?(view, "#worktrees", "worktree_busy")
   end
 
-  describe "apply dev layout" do
-    setup ctx do
-      for key <- [:live_scenarios] do
-        old = Application.fetch_env(:jarvis2, key)
-
-        on_exit(fn ->
-          case old do
-            {:ok, v} -> Application.put_env(:jarvis2, key, v)
-            :error -> Application.delete_env(:jarvis2, key)
-          end
-        end)
-      end
-
-      Application.put_env(:jarvis2, :live_scenarios, [])
-      %{ctx: ctx}
-    end
-
-    test "disabled layout is refused and recorded", %{ctx: ctx} do
-      publish(ctx.mirror, in_cwd(view("working", stale: false)))
-      {:ok, view, _} = ctx.conn |> sign_in() |> live("/")
-
-      view |> element("#apply-layout") |> render_click()
-      assert render(view) =~ "The layout could not be created."
-
-      assert [%{source: :ui, outcome: :refused, payload: %{"name" => "dev"}}] =
-               Jarvis2.Journal.recent(type: "fleet.apply_layout")
-    end
-
-    test "asks for a run when the owned workspace is missing", %{ctx: ctx} do
-      snapshot =
-        put_in(view("working", stale: false), [:snapshot, "workspaces"], [
-          %{"workspace_id" => "w1", "label" => "other"}
-        ])
-
-      publish(ctx.mirror, snapshot)
-      {:ok, view, _} = ctx.conn |> sign_in() |> live("/")
-      view |> element("#apply-layout") |> render_click()
-      assert render(view) =~ "Start a run first to create the jarvis2 workspace."
-      assert Jarvis2.Journal.recent(type: "fleet.apply_layout") == []
-    end
-
-    test "explains when there is no usable pane or Herdr state", %{ctx: ctx} do
-      publish(ctx.mirror, %{view("working", stale: false) | snapshot: nil, stale: true})
-      {:ok, view, _} = ctx.conn |> sign_in() |> live("/")
-      view |> element("#apply-layout") |> render_click()
-      assert render(view) =~ "Herdr is not connected"
-      assert Jarvis2.Journal.recent(type: "fleet.apply_layout") == []
-    end
-  end
-
-  # The dev layout needs a real working directory for the caller's pane.
-  defp in_cwd(view),
-    do:
-      update_in(view, [:snapshot, "panes"], fn panes ->
-        for p <- panes, do: Map.put(p, "cwd", File.cwd!())
-      end)
-
   test "streams newly journalled events", ctx do
     {:ok, view, _} = ctx.conn |> sign_in() |> live("/")
     {:ok, event} = Jarvis2.Journal.record(%{source: :mcp, type: "tool.live_check"})
