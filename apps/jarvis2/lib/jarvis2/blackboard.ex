@@ -6,6 +6,9 @@ defmodule Jarvis2.Blackboard do
   alias Jarvis2.Repo
 
   @max_entries 256
+  @topic "blackboard"
+
+  def topic, do: @topic
 
   @doc "Returns `:ok`, `{:error, :full}` or `{:error, :invalid}`."
   def put(key, value, run_id \\ nil) do
@@ -23,10 +26,26 @@ defmodule Jarvis2.Blackboard do
       end
     end)
     |> case do
-      {:ok, :ok} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:ok, :ok} ->
+        broadcast()
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  @doc "Removes a key; returns `:ok` whether or not it existed."
+  def delete(key) do
+    Repo.delete_all(from e in Entry, where: e.key == ^key)
+    broadcast()
+    :ok
+  end
+
+  @doc "All entries (with their metadata), ordered by key."
+  def list_entries, do: Entry |> order_by(:key) |> Repo.all()
+
+  defp broadcast, do: Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, @topic, :blackboard_changed)
 
   def get(key) do
     case Repo.get_by(Entry, key: key) do

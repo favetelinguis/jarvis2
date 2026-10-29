@@ -45,4 +45,21 @@ defmodule Jarvis2.BlackboardTest do
     assert value in 1..20
     assert map_size(Blackboard.list()) == 1
   end
+
+  test "deleting and writing broadcast changes, and entries keep their writer" do
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, Blackboard.topic())
+    run_id = Ecto.UUID.generate()
+
+    :ok = Blackboard.put("a", 1, run_id)
+    assert_receive :blackboard_changed
+    assert [%{key: "a", value: 1, updated_by_run_id: ^run_id}] = Blackboard.list_entries()
+
+    assert {:error, :invalid} = Blackboard.put("", 1)
+    refute_receive :blackboard_changed, 50
+
+    :ok = Blackboard.delete("a")
+    assert_receive :blackboard_changed
+    assert Blackboard.list_entries() == []
+    assert Blackboard.delete("missing") == :ok
+  end
 end
