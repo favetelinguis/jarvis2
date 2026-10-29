@@ -1,7 +1,9 @@
 defmodule Jarvis2Web.DashboardLive do
   use Jarvis2Web, :live_view
 
+  alias Jarvis2.Fleet
   alias Jarvis2.Herdr.Mirror
+  alias Jarvis2.Runs.Launcher
   alias Jarvis2.Journal
 
   @event_limit 50
@@ -21,6 +23,23 @@ defmodule Jarvis2Web.DashboardLive do
   end
 
   @impl true
+  def handle_event("apply_layout", _params, socket) do
+    with {:ok, pane} <- Launcher.anchor(socket.assigns.view),
+         caller = %{pane: pane["pane_id"], workspace: pane["workspace_id"]},
+         {:ok, result} <- Fleet.apply_layout("dev", caller, source: :ui) do
+      message =
+        if match?(%{dry_run: true}, result),
+          do: "Dry-run: the dev layout tab would be created.",
+          else: "Dev layout created."
+
+      {:noreply, put_flash(socket, :info, message)}
+    else
+      {:error, message} when is_binary(message) -> {:noreply, put_flash(socket, :error, message)}
+      {:error, _} -> {:noreply, put_flash(socket, :error, "The layout could not be created.")}
+    end
+  end
+
+  @impl true
   def handle_info({:jarvis2, "mirror:updated", %{source: source, view: view}}, socket) do
     if source == GenServer.whereis(mirror()),
       do: {:noreply, assign(socket, :view, view)},
@@ -36,7 +55,10 @@ defmodule Jarvis2Web.DashboardLive do
   def render(assigns) do
     ~H"""
     <h1>Dashboard</h1>
-    <p><.link navigate="/runs/new">New run</.link></p>
+    <p class="actions">
+      <.link navigate="/runs/new">New run</.link>
+      <button type="button" phx-click="apply_layout" id="apply-layout">Apply dev layout</button>
+    </p>
     <div class={["banner", connection(@view) != :online && "banner-warn"]} id="connection">
       <.live_badge live={@live?} />
       <span>{connection_text(connection(@view))}</span>
@@ -88,6 +110,22 @@ defmodule Jarvis2Web.DashboardLive do
           </tr>
         </tbody>
       </table>
+    </section>
+
+    <section :if={@view[:worktrees] not in [nil, %{}]} id="worktrees">
+      <h2>Worktrees</h2>
+      <div :for={{repo, worktrees} <- @view.worktrees}>
+        <strong>{repo}</strong>
+        <ul>
+          <li :for={worktree <- worktrees}>
+            <code>{worktree["path"]}</code>
+            <span :if={worktree["branch"]} class="muted">{worktree["branch"]}</span>
+          </li>
+        </ul>
+      </div>
+      <p :for={{repo, code} <- @view[:worktree_errors] || %{}} class="muted">
+        {repo}: {code}
+      </p>
     </section>
 
     <section id="events-section">
