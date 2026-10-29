@@ -92,7 +92,8 @@ defmodule Jarvis2Web.RunLive.Show do
     <p>
       <.live_badge live={@live?} />
       <span class="muted">
-        {@run.kind} · {@run.model} ({@run.thinking}) · <code>{@run.cwd}</code>
+        {@run.kind}<span :if={@run.kind != "mix"}> · {@run.model} ({@run.thinking})</span>
+        · <code>{@run.cwd}</code>
       </span>
       <span :if={@run.pane_id}> · pane <code>{@run.pane_id}</code></span>
     </p>
@@ -102,10 +103,35 @@ defmodule Jarvis2Web.RunLive.Show do
 
     <p :if={Run.active?(@run) or @run.status == :dry_run} class="actions">
       <button :if={@run.pane_id} phx-click="focus" id="focus">Open in Herdr</button>
-      <button phx-click="stop" id="stop" data-confirm="Stop this run and close its pane?">
+      <button
+        :if={@run.kind != "mix"}
+        phx-click="stop"
+        id="stop"
+        data-confirm="Stop this run and close its pane?"
+      >
         Stop
       </button>
     </p>
+
+    <section :if={summary = @run.result && @run.result["summary"]} id="result">
+      <h2>Result</h2>
+      <p>{summary}</p>
+      <ul :if={@run.result["artifacts"] not in [nil, []]}>
+        <li :for={artifact <- @run.result["artifacts"]}><code>{artifact}</code></li>
+      </ul>
+    </section>
+
+    <section :if={@run.result && @run.result["output"]} id="mix-output">
+      <h2>Mix output</h2>
+      <p class="muted">
+        exit status {@run.result["exit_status"]}{if @run.result["timed_out"], do: " (timed out)"}{if @run.result[
+                                                                                                       "truncated"
+                                                                                                     ],
+                                                                                                     do:
+                                                                                                       " · output truncated"}
+      </p>
+      <pre class="tail">{@run.result["output"]}</pre>
+    </section>
 
     <section :if={@questions != []} id="questions">
       <h2>Waiting for you</h2>

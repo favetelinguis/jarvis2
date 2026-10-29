@@ -301,6 +301,73 @@ defmodule Jarvis2.RunsTest do
     end
   end
 
+  describe "run_mix/3" do
+    setup ctx do
+      fake = Path.join(ctx.cwd, "fake-mix")
+      File.write!(fake, "#!/bin/sh\necho \"mix $@ ran\"\nexit ${FAKE_MIX_EXIT:-0}\n")
+      File.chmod!(fake, 0o700)
+      config(:mix_project_dir, ctx.cwd)
+      config(:mix_executable, fake)
+      :ok
+    end
+
+    test "records a passing Mix job as a finished run with its output", ctx do
+      Phoenix.PubSub.subscribe(Jarvis2.PubSub, Runs.topic())
+      assert {:ok, %{exit_status: 0, output: "mix test ran\n"}} = Runs.run_mix("test", nil)
+
+      assert [%Run{kind: "mix", name: "mix test", status: :done} = run] = Runs.list_runs()
+      assert run.cwd == ctx.cwd
+      assert run.result["exit_status"] == 0
+      assert run.result["output"] == "mix test ran\n"
+      assert %DateTime{} = run.finished_at
+      assert_receive {:run, %Run{status: :working, kind: "mix"}}
+      assert_receive {:run, %Run{status: :done}}
+
+      events = Journal.recent(run_id: run.id)
+      assert Enum.map(events, & &1.type) == ["run.created", "run.mix"]
+      assert %{outcome: :ok, payload: %{"exit_status" => 0}} = List.last(events)
+    end
+
+    test "a failing job fails the run and links it to the asking agent run", ctx do
+      System.put_env("FAKE_MIX_EXIT", "2")
+      on_exit(fn -> System.delete_env("FAKE_MIX_EXIT") end)
+      {:ok, parent} = Runs.create_run(%{name: "agent", task: "t", cwd: ctx.cwd})
+
+      assert {:ok, %{exit_status: 2}} = Runs.run_mix("compile", nil, parent_run_id: parent.id)
+      [mix_run] = Runs.list_runs(status: :failed)
+      assert %Run{kind: "mix", parent_run_id: parent_id} = mix_run
+      assert parent_id == parent.id
+      assert %{outcome: :error} = List.last(Journal.recent(run_id: mix_run.id))
+    end
+
+    test "disallowed tasks and projects never create a run", ctx do
+      assert {:error, "Mix task is not allowed"} = Runs.run_mix("deps.get", nil)
+      assert {:error, "Mix task is not allowed"} = Runs.start_mix("deps.get")
+      assert Runs.list_runs() == []
+
+      assert {:error, "project must be the configured trusted project"} =
+               Runs.run_mix("test", Path.join(ctx.cwd, "elsewhere"))
+
+      assert [%Run{status: :failed, result: %{"error" => "project" <> _}}] = Runs.list_runs()
+    end
+
+    test "Mix runs cannot be stopped and are failed if the server died mid-run", ctx do
+      {:ok, _} = Runs.run_mix("test", nil)
+      [done] = Runs.list_runs()
+      assert {:error, "Mix runs finish on their own."} = Runs.stop_run(done)
+
+      {:ok, orphan} =
+        %Run{}
+        |> Run.mix_changeset(%{task: "test", cwd: ctx.cwd})
+        |> Repo.insert()
+
+      old = DateTime.add(DateTime.utc_now(), -600, :second)
+      Repo.update_all(from(r in Run, where: r.id == ^orphan.id), set: [inserted_at: old])
+      Runs.apply_view(view(), %{})
+      assert %{status: :failed, result: %{"error" => "interrupted"}} = Runs.get_run(orphan.id)
+    end
+  end
+
   test "the monitor applies mirror updates from the configured mirror only", %{
     cwd: cwd,
     mirror: mirror

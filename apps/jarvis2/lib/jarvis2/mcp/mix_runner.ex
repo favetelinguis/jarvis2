@@ -8,8 +8,14 @@ defmodule Jarvis2.MCP.MixRunner do
   }
   @output_limit 16_384
 
+  def tasks, do: Enum.sort(Map.keys(@commands))
+
+  @doc "The one project Mix tasks may run in."
+  def project_root,
+    do: Application.get_env(:jarvis2, :mix_project_dir, File.cwd!()) |> Path.expand()
+
   def run(task, requested_project) do
-    root = Application.get_env(:jarvis2, :mix_project_dir, File.cwd!()) |> Path.expand()
+    root = project_root()
 
     project =
       if is_binary(requested_project), do: Path.expand(requested_project, root), else: root

@@ -63,6 +63,40 @@ defmodule Jarvis2Web.RunLiveTest do
       refute has_element?(filtered, "#run-#{one.id}")
     end
 
+    test "starts a Mix job from the page and shows its output", %{conn: conn} do
+      dir = Path.join(System.tmp_dir!(), "mixui-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      fake = Path.join(dir, "fake-mix")
+      File.write!(fake, "#!/bin/sh\necho \"all green\"\n")
+      File.chmod!(fake, 0o700)
+
+      for {key, value} <- [mix_project_dir: dir, mix_executable: fake] do
+        old = Application.fetch_env(:jarvis2, key)
+        Application.put_env(:jarvis2, key, value)
+
+        on_exit(fn ->
+          File.rm_rf!(dir)
+
+          case old do
+            {:ok, v} -> Application.put_env(:jarvis2, key, v)
+            :error -> Application.delete_env(:jarvis2, key)
+          end
+        end)
+      end
+
+      {:ok, view, _} = live(conn, "/runs")
+      view |> element("button", "mix test") |> render_click()
+
+      assert_eventually(fn -> has_element?(view, "td .badge-done") end)
+      [run] = Runs.list_runs()
+      assert run.kind == "mix"
+
+      {:ok, show, html} = live(conn, "/runs/#{run.id}")
+      assert html =~ "all green"
+      assert html =~ "exit status 0"
+      refute has_element?(show, "#stop")
+    end
+
     test "shows an empty state", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/runs")
       assert html =~ "No runs yet."

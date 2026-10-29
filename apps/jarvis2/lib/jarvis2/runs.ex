@@ -7,6 +7,7 @@ defmodule Jarvis2.Runs do
   import Ecto.Query
 
   alias Jarvis2.{Journal, Questions, Repo, Tokens}
+  alias Jarvis2.MCP.MixRunner
   alias Jarvis2.Runs.{Launcher, Run}
 
   @topic "runs"
@@ -99,7 +100,60 @@ defmodule Jarvis2.Runs do
 
   def launch(run), do: run
 
+  @doc """
+  Runs an allow-listed Mix task as a run of kind `mix` and returns the runner's own result. The
+  run records the exit status and bounded output, and `parent_run_id` links it to the agent run
+  that asked for it.
+  """
+  def run_mix(task, project, opts \\ []) do
+    attrs = %{task: task, cwd: MixRunner.project_root(), parent_run_id: opts[:parent_run_id]}
+
+    case %Run{} |> Run.mix_changeset(attrs) |> Repo.insert() do
+      {:ok, run} ->
+        record(run, "run.created", %{kind: "mix", task: task}, :ok, :ui)
+        broadcast(run)
+        result = MixRunner.run(task, project)
+        finish_mix(run, result)
+        result
+
+      {:error, _changeset} ->
+        {:error, "Mix task is not allowed"}
+    end
+  end
+
+  @doc "Starts a Mix run in the background (from the UI)."
+  def start_mix(task) do
+    if task in MixRunner.tasks() do
+      {:ok, _} = Task.Supervisor.start_child(Jarvis2.TaskSupervisor, fn -> run_mix(task, nil) end)
+      :ok
+    else
+      {:error, "Mix task is not allowed"}
+    end
+  end
+
+  defp finish_mix(run, {:ok, %{exit_status: status} = result}) do
+    run
+    |> progress(%{
+      status: if(status == 0, do: :done, else: :failed),
+      finished_at: now(),
+      result: Map.take(result, [:exit_status, :output, :truncated, :timed_out])
+    })
+    |> record(
+      "run.mix",
+      %{exit_status: status, timed_out: result.timed_out},
+      if(status == 0, do: :ok, else: :error)
+    )
+  end
+
+  defp finish_mix(run, {:error, message}) do
+    run
+    |> progress(%{status: :failed, finished_at: now(), result: %{error: message}})
+    |> record("run.mix", %{error: message}, :error)
+  end
+
   @doc "Closes the run's pane (when it is still ours) and marks the run stopped."
+  def stop_run(%Run{kind: "mix"}), do: {:error, "Mix runs finish on their own."}
+
   def stop_run(%Run{} = run) do
     if Run.active?(run) or run.status == :dry_run do
       run |> Launcher.close() |> finish_stop(run)
@@ -194,6 +248,17 @@ defmodule Jarvis2.Runs do
     seen
   end
 
+  # A Mix job whose server died mid-run never reports back.
+  defp reconcile(%Run{pane_id: nil, kind: "mix", status: :working} = run, _view, seen) do
+    if DateTime.diff(now(), run.inserted_at, :millisecond) > @stale_start_ms * 2 do
+      run
+      |> progress(%{status: :failed, finished_at: now(), result: %{error: "interrupted"}})
+      |> record("run.status", %{to: "failed", reason: "interrupted"}, :error)
+    end
+
+    seen
+  end
+
   defp reconcile(%Run{pane_id: nil}, _view, seen), do: seen
 
   defp reconcile(run, view, seen) do
@@ -247,8 +312,15 @@ defmodule Jarvis2.Runs do
     run
   end
 
-  defp record(run, type, payload, outcome \\ :ok) do
-    Journal.record(%{source: :ui, type: type, run_id: run.id, outcome: outcome, payload: payload})
+  defp record(run, type, payload, outcome \\ :ok, source \\ :ui) do
+    Journal.record(%{
+      source: source,
+      type: type,
+      run_id: run.id,
+      outcome: outcome,
+      payload: payload
+    })
+
     run
   end
 

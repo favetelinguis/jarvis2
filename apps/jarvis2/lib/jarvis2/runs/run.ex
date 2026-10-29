@@ -45,6 +45,20 @@ defmodule Jarvis2.Runs.Run do
     |> validate_cwd()
   end
 
+  @doc "A Mix job: no agent, model or thinking level; the task is the allow-listed Mix task."
+  def mix_changeset(run, attrs) do
+    run
+    |> cast(attrs, [:task, :cwd, :parent_run_id])
+    |> put_change(:name, "mix " <> to_string(attrs[:task]))
+    |> put_change(:kind, "mix")
+    |> put_change(:model, "n/a")
+    |> put_change(:thinking, "off")
+    |> put_change(:status, :working)
+    |> put_change(:started_at, DateTime.utc_now())
+    |> validate_required([:task, :cwd])
+    |> validate_inclusion(:task, Jarvis2.MCP.MixRunner.tasks())
+  end
+
   @doc "Records where the run's agent lives or how it ended."
   def progress_changeset(run, attrs) do
     cast(run, attrs, [

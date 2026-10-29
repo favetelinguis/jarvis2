@@ -17,6 +17,14 @@ defmodule Jarvis2Web.RunLive.Index do
   end
 
   @impl true
+  def handle_event("mix", %{"task" => task}, socket) do
+    case Runs.start_mix(task) do
+      :ok -> {:noreply, put_flash(socket, :info, "Started mix #{task}.")}
+      {:error, message} -> {:noreply, put_flash(socket, :error, message)}
+    end
+  end
+
+  @impl true
   def handle_info({:run, _run}, socket), do: {:noreply, load(socket)}
 
   defp load(socket), do: assign(socket, :runs, Runs.list_runs(status: socket.assigns.status))
@@ -25,8 +33,12 @@ defmodule Jarvis2Web.RunLive.Index do
   def render(assigns) do
     ~H"""
     <h1>Runs</h1>
-    <p>
+    <p class="actions">
       <.link navigate="/runs/new">New run</.link>
+      <span class="muted">Mix jobs in this project:</span>
+      <button :for={task <- Jarvis2.MCP.MixRunner.tasks()} phx-click="mix" phx-value-task={task}>
+        mix {task}
+      </button>
     </p>
     <nav id="status-filter" class="filter">
       <.link patch="/runs" class={is_nil(@status) && "current"}>all</.link>
