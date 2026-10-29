@@ -18,7 +18,6 @@ defmodule Jarvis2Web.DashboardLive do
     {:ok,
      socket
      |> assign(:view, Mirror.get(mirror()))
-     |> assign(:live?, Application.get_env(:jarvis2, :live, false))
      |> stream(:events, Journal.recent(limit: @event_limit) |> Enum.reverse())}
   end
 
@@ -26,16 +25,18 @@ defmodule Jarvis2Web.DashboardLive do
   def handle_event("apply_layout", _params, socket) do
     with {:ok, pane} <- Launcher.anchor(socket.assigns.view),
          caller = %{pane: pane["pane_id"], workspace: pane["workspace_id"]},
-         {:ok, result} <- Fleet.apply_layout("dev", caller, source: :ui) do
-      message =
-        if match?(%{dry_run: true}, result),
-          do: "Dry-run: the dev layout tab would be created.",
-          else: "Dev layout created."
-
-      {:noreply, put_flash(socket, :info, message)}
+         {:ok, _result} <- Fleet.apply_layout("dev", caller, source: :ui) do
+      {:noreply, put_flash(socket, :info, "Dev layout created.")}
     else
-      {:error, message} when is_binary(message) -> {:noreply, put_flash(socket, :error, message)}
-      {:error, _} -> {:noreply, put_flash(socket, :error, "The layout could not be created.")}
+      {:error, :no_anchor} ->
+        {:noreply,
+         put_flash(socket, :error, "Start a run first to create the jarvis2 workspace.")}
+
+      {:error, message} when is_binary(message) ->
+        {:noreply, put_flash(socket, :error, message)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "The layout could not be created.")}
     end
   end
 
@@ -60,7 +61,6 @@ defmodule Jarvis2Web.DashboardLive do
       <button type="button" phx-click="apply_layout" id="apply-layout">Apply dev layout</button>
     </p>
     <div class={["banner", connection(@view) != :online && "banner-warn"]} id="connection">
-      <.live_badge live={@live?} />
       <span>{connection_text(connection(@view))}</span>
       <span :if={diff = @view[:layout_diff]} class="muted">
         · layout {diff["status"]}, {length(diff["changes"] || [])} change(s)

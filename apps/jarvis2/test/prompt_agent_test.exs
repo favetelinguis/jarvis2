@@ -67,7 +67,6 @@ defmodule Jarvis2.PromptAgentTest do
     config(:mirror, mirror)
     config(:prompt_guard, guard)
     config(:herdr_socket, socket)
-    config(:live, false)
     config(:live_scenarios, [])
     start_supervised!({Finch, name: Jarvis2.PromptTestFinch})
 
@@ -78,10 +77,11 @@ defmodule Jarvis2.PromptAgentTest do
     %{port: port, mirror: mirror, view: view, behavior: behavior}
   end
 
-  test "dry-run is scoped, refuses self and unsafe targets, and sends no input", ctx do
+  test "prompts are scoped and refuse self and unsafe targets", ctx do
+    config(:live_scenarios, [:agent_prompt])
     h = session(ctx, "w1:p1", "w1")
 
-    assert {:ok, %{"dry_run" => true, "target" => "w1:p2"}} =
+    assert {:ok, %{"type" => "agent_prompt"}} =
              prompt(ctx, h, "beta", "Review the test", false)
 
     assert {:error, _} = prompt(ctx, h, "alpha", "self", false)
@@ -109,19 +109,24 @@ defmodule Jarvis2.PromptAgentTest do
       )
 
     :ok = GenServer.call(ctx.mirror, {:put, without_optional})
-    assert {:ok, %{"dry_run" => true}} = prompt(ctx, h, "gamma", "idle on older Herdr", false)
+
+    assert {:ok, %{"type" => "agent_prompt"}} =
+             prompt(ctx, h, "gamma", "idle on older Herdr", false)
+
+    assert_receive {:prompt_request, %{"params" => %{"target" => "w1:p2"}}}
+    assert_receive {:prompt_request, %{"params" => %{"target" => "w1:p3"}}}
     refute_receive {:prompt_request, _}, 100
 
     outcomes = for %{type: "fleet.prompt"} = event <- Jarvis2.Journal.recent(), do: event.outcome
-    assert :dry_run in outcomes
+    assert :ok in outcomes
     assert :refused in outcomes
     refute inspect(Jarvis2.Journal.recent()) =~ "Review the test"
   end
 
-  test "live mode still requires the agent_prompt scenario", ctx do
-    config(:live, true)
+  test "prompt requires the agent_prompt scenario", ctx do
     h = session(ctx, "w1:p1", "w1")
-    assert {:ok, %{"dry_run" => true}} = prompt(ctx, h, "beta", "dry", false)
+    assert {:error, message} = prompt(ctx, h, "beta", "disabled", false)
+    assert message =~ "disabled"
     refute_receive {:prompt_request, _}, 100
     config(:live_scenarios, [:agent_prompt])
     assert {:ok, %{"type" => "agent_prompt"}} = prompt(ctx, h, "beta", "live", false)
@@ -130,7 +135,6 @@ defmodule Jarvis2.PromptAgentTest do
 
   test "explicit live gate resolves a pane target and bounds wait without logging text",
        ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_prompt])
     h = session(ctx, "w1:p1", "w1")
 
@@ -156,7 +160,6 @@ defmodule Jarvis2.PromptAgentTest do
   end
 
   test "rejects indirect prompt cycles and missing or stale caller identity", ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_prompt])
     a = session(ctx, "w1:p1", "w1")
     b = session(ctx, "w1:p2", "w1")
@@ -176,7 +179,6 @@ defmodule Jarvis2.PromptAgentTest do
   end
 
   test "rate limits a caller across distinct targets", ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_prompt])
     h = session(ctx, "w1:p1", "w1")
 
@@ -190,7 +192,6 @@ defmodule Jarvis2.PromptAgentTest do
   end
 
   test "enforces the per-caller rate limit atomically across concurrent targets", ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_prompt])
     Agent.update(ctx.behavior, fn _ -> {:delay, 100} end)
     headers = Enum.map(1..6, fn _ -> session(ctx, "w1:p1", "w1") end)
@@ -209,7 +210,6 @@ defmodule Jarvis2.PromptAgentTest do
   end
 
   test "serializes concurrent prompts to the same target", ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_prompt])
     Agent.update(ctx.behavior, fn _ -> {:delay, 350} end)
     a = session(ctx, "w1:p1", "w1")
@@ -222,7 +222,6 @@ defmodule Jarvis2.PromptAgentTest do
   end
 
   test "a disconnected prompt is not retried and reports uncertain delivery", ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_prompt])
     Agent.update(ctx.behavior, fn _ -> :close end)
     h = session(ctx, "w1:p1", "w1")
@@ -238,7 +237,6 @@ defmodule Jarvis2.PromptAgentTest do
   end
 
   test "Herdr can still reject an apparently idle target", ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_prompt])
     Agent.update(ctx.behavior, fn _ -> {:error, "agent_not_ready"} end)
     h = session(ctx, "w1:p1", "w1")
@@ -249,7 +247,6 @@ defmodule Jarvis2.PromptAgentTest do
   end
 
   test "an unavailable guard refuses to send input", ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_prompt])
     h = session(ctx, "w1:p1", "w1")
     config(:prompt_guard, :missing_prompt_guard)

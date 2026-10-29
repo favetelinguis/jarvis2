@@ -15,9 +15,9 @@ defmodule Jarvis2.Herdr.ExecutionGuard do
     GenServer.start_link(__MODULE__, opts, if(name, do: [name: name], else: []))
   end
 
-  def reserve(caller, mode, server \\ __MODULE__) do
+  def reserve(caller, server \\ __MODULE__) do
     try do
-      GenServer.call(server, {:reserve, caller, mode}, 3_000)
+      GenServer.call(server, {:reserve, caller}, 3_000)
     rescue
       _ -> {:error, "execution guard unavailable"}
     catch
@@ -72,7 +72,7 @@ defmodule Jarvis2.Herdr.ExecutionGuard do
   def init(_), do: {:ok, %{active: %{}, rates: %{}, cooldowns: %{}}}
 
   @impl true
-  def handle_call({:reserve, caller, mode}, {owner, _}, state) when mode in [:dry, :live] do
+  def handle_call({:reserve, caller}, {owner, _}, state) do
     now = System.monotonic_time(:millisecond)
     state = prune(state, now)
     mirror = Application.get_env(:jarvis2, :mirror, Mirror)
@@ -85,8 +85,8 @@ defmodule Jarvis2.Herdr.ExecutionGuard do
       end
 
     with {:ok, verified} <- verify_caller(caller, view),
-         :ok <- allow(state, mode, verified.pane) do
-      key = {mode, verified.pane}
+         :ok <- allow(state, verified.pane) do
+      key = verified.pane
       lease = make_ref()
       entry = %{lease: lease, monitor: Process.monitor(owner)}
       active = Map.put(state.active, key, entry)
@@ -97,7 +97,7 @@ defmodule Jarvis2.Herdr.ExecutionGuard do
     end
   end
 
-  def handle_call({:reserve, _, _}, _, state),
+  def handle_call({:reserve, _}, _, state),
     do: {:reply, {:error, "invalid execution request"}, state}
 
   def handle_call({:finish, lease, outcome}, _, state),
@@ -121,9 +121,7 @@ defmodule Jarvis2.Herdr.ExecutionGuard do
 
   defp verify_caller(caller, view), do: validate(caller, view)
 
-  defp allow(state, mode, caller) do
-    key = {mode, caller}
-
+  defp allow(state, key) do
     cond do
       Map.has_key?(state.active, key) or Map.has_key?(state.cooldowns, key) ->
         {:error, "caller execution is busy or cooling down"}

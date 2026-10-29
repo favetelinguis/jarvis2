@@ -13,12 +13,12 @@ set -u
 [ "${HERDR_ENV:-}" = 1 ] || { echo "HERDR_ENV=1 is required" >&2; exit 2; }
 root=$(cd "$(dirname "$0")/.." && pwd)
 d=$(mktemp -d /tmp/jarvis2-tour.XXXXXX)
-n="jarvis2-tour-${d##*.}"
+n=jarvis2
 free_port(){ python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
 luna=0; [ "${MODEL:-mock}" = luna ] && luna=1
 mp=$(free_port); jp=$(free_port)
 [ "$luna" = 1 ] && jp=${JARVIS2_PORT:-4747}   # your Pi MCP config points at this port
-fail=0; mock=; app=; server=
+fail=0; mock=; app=
 check(){ if grep -q -- "$2" "$d/app.log"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 
 export XDG_CONFIG_HOME="$d/config" XDG_DATA_HOME="$d/data" HERDR_CONFIG_PATH="$d/config/herdr/config.toml" \
@@ -41,20 +41,15 @@ fi
   && printf 'ExUnit.start()\n' > test/test_helper.exs \
   && printf 'defmodule XTest do\n  use ExUnit.Case\n  test "fails", do: assert(1 == 2)\nend\n' > test/x_test.exs \
   && git add . && git -c user.email=a@b -c user.name=t commit -q -m init)
-herdr --session "$n" server >"$d/server.log" 2>&1 & server=$!
-cleanup(){ herdr session stop "$n" >/dev/null 2>&1; herdr session delete "$n" >/dev/null 2>&1; kill $server $mock $app 2>/dev/null; wait 2>/dev/null
+cleanup(){ herdr session stop "$n" >/dev/null 2>&1; herdr session delete "$n" >/dev/null 2>&1; kill $mock $app 2>/dev/null; wait 2>/dev/null
   if [ "$fail" = 0 ]; then rm -rf "$d"; else echo "kept $d"; fi; }
 trap cleanup EXIT
-for _ in $(seq 1 100); do herdr --session "$n" api snapshot >/dev/null 2>&1 && break; sleep .1; done
-pane=$(herdr --session "$n" workspace create --cwd "$d/repo" --no-focus | python3 -c 'import json,sys;print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')
-sock=$(herdr session list --json | python3 -c 'import json,sys;print(next(s["socket_path"] for s in json.load(sys.stdin)["sessions"] if s["name"]==sys.argv[1]))' "$n")
-
 cd "$root"
 if [ "$luna" = 1 ]; then
-  HERDR_SOCKET_PATH="$sock" HERDR_PANE_ID="$pane" JARVIS2_LIVE=1 JARVIS2_PORT=$jp JARVIS2_STATE_DIR="$d/state" \
-    mix run --no-halt -e 'Jarvis2.Settings.update(%{scenarios: ["agent_spawn", "agent_prompt"]})' >"$d/app.log" 2>&1 & app=$!
+  JARVIS2_PORT=$jp JARVIS2_STATE_DIR="$d/state" \
+    mix run --no-halt >"$d/app.log" 2>&1 & app=$!
   for _ in $(seq 1 200); do curl -s -o /dev/null "http://127.0.0.1:$jp/healthz" && break; sleep .2; done
-  echo "Isolated Herdr session: $n   (watch it with: herdr session attach $n)"
+  echo "Isolated Herdr session: $n   (watch it with: XDG_CONFIG_HOME=$XDG_CONFIG_HOME herdr session attach $n)"
   grep -a 'Jarvis2 UI' "$d/app.log" || { echo "Jarvis2 did not start; see $d/app.log" >&2; fail=1; exit 1; }
   echo "Open the link above, choose New run (defaults: pi, openrouter/openai/gpt-6-luna, thinking low)."
   echo 'Suggested task: Ask me which file to change, then ask for approval before editing.'
@@ -62,9 +57,10 @@ if [ "$luna" = 1 ]; then
   read -r _
   exit 0
 fi
-HERDR_SOCKET_PATH="$sock" JARVIS2_LIVE=1 JARVIS2_PORT=$jp JARVIS2_STATE_DIR="$d/state" \
+JARVIS2_PORT=$jp JARVIS2_STATE_DIR="$d/state" \
   mix run --no-halt -e "Application.put_env(:jarvis2, :live_scenarios, [:run_command, :agent_prompt, :test_loop, :attention]); Application.put_env(:jarvis2, :test_loop_roots, [\"$d\"])" >"$d/app.log" 2>&1 & app=$!
 for _ in $(seq 1 200); do curl -s -o /dev/null "http://127.0.0.1:$jp/healthz" && break; sleep .2; done
+pane=$(herdr --session "$n" workspace create --label jarvis2 --cwd "$d/repo" --no-focus | python3 -c 'import json,sys;print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')
 herdr --session "$n" agent start tour --kind pi --pane "$pane" >/dev/null || { echo "FAIL agent start"; fail=1; exit 1; }
 sleep 3
 # Herdr's detector does not see Pi's mock turn, so report the lifecycle explicitly.

@@ -48,6 +48,19 @@ defmodule Jarvis2.HerdrClientTest do
     %{socket: socket}
   end
 
+  test "requires an explicit socket path even when a Herdr environment is present" do
+    previous = System.get_env("HERDR_SOCKET_PATH")
+    System.put_env("HERDR_SOCKET_PATH", "/not-the-owned-session")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("HERDR_SOCKET_PATH", previous),
+        else: System.delete_env("HERDR_SOCKET_PATH")
+    end)
+
+    assert_raise KeyError, fn -> Jarvis2.Herdr.Socket.init([]) end
+  end
+
   test "reads and server error envelopes pass through the client", %{socket: socket} do
     assert {:ok, %{"snapshot" => %{"panes" => []}}} =
              Jarvis2.Herdr.Client.snapshot(server: socket)

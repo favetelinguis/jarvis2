@@ -48,27 +48,16 @@ defmodule Jarvis2.HerdrActionsTest do
     %{socket: socket}
   end
 
-  test "mutations are not sent unless both live mode and scenario are enabled", %{socket: socket} do
-    previous_live = Application.get_env(:jarvis2, :live, false)
+  test "disabled scenarios refuse mutations; enabled scenarios execute", %{socket: socket} do
     previous_scenarios = Application.get_env(:jarvis2, :live_scenarios, [])
 
     on_exit(fn ->
-      Application.put_env(:jarvis2, :live, previous_live)
       Application.put_env(:jarvis2, :live_scenarios, previous_scenarios)
     end)
 
-    Application.put_env(:jarvis2, :live, false)
     Application.put_env(:jarvis2, :live_scenarios, [:attention])
 
-    assert {:ok, %{dry_run: true}} =
-             Jarvis2.Herdr.Actions.call(:attention, "notification.show", %{"title" => "hi"},
-               server: socket
-             )
-
-    refute_receive {:request, _}, 50
-    Application.put_env(:jarvis2, :live, true)
-
-    assert {:ok, %{dry_run: true}} =
+    assert {:error, %{code: "disabled"}} =
              Jarvis2.Herdr.Actions.call(:other, "notification.show", %{}, server: socket)
 
     refute_receive {:request, _}, 50

@@ -20,31 +20,29 @@ Jarvis2 UI: http://127.0.0.1:4747/login?code=…  (single use, 10 minutes)
 
 Open it in your browser. The code is printed to stdout rather than logged. If it expires, restart, or
 paste the long-lived token from `$JARVIS2_STATE_DIR/token` (default `~/.local/state/jarvis2/token`) on
-the login page. Run it inside a Herdr pane (or keep a pane focused) so new runs have somewhere to split from.
+the login page. Jarvis2 creates and uses its own Herdr session; it need not run inside Herdr.
+Watch the session with `herdr session attach jarvis2`.
 
 | Variable            | Meaning                                                                    |
 | ------------------- | -------------------------------------------------------------------------- |
 | `JARVIS2_PORT`      | HTTP port on `127.0.0.1` (default `4747`)                                  |
 | `JARVIS2_STATE_DIR` | token, cookie secret and `jarvis2.db` (default `~/.local/state/jarvis2`)   |
-| `JARVIS2_LIVE=1`    | allow real Herdr changes; without it every action is a recorded dry-run    |
 | `JARVIS2_SCENARIOS` | optional comma-separated lock-down of the actions that may ever be enabled |
 
 A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bin/jarvis2 start`.
 
 ## The showcase: a Pi agent on `openrouter/openai/gpt-6-luna`
 
-1. Start with `JARVIS2_LIVE=1 mix run --no-halt` and sign in.
-2. **Settings**: enable `agent_spawn` and `agent_prompt` (live actions are off until you do).
-3. **New run**: the form is prefilled with agent `pi`, model `openrouter/openai/gpt-6-luna`, thinking `low`.
+1. Start with `mix run --no-halt` and sign in.
+2. **New run**: the form is prefilled with agent `pi`, model `openrouter/openai/gpt-6-luna`, thinking `low`.
    Give it a task, for example _Ask me which file to change, then ask for approval before editing_.
-4. Jarvis2 splits a pane next to the anchor pane, starts Pi there with
+3. Jarvis2 splits a pane next to the anchor pane, starts Pi there with
    `--provider openrouter --model openai/gpt-6-luna --thinking low`, and delivers the task. The run page
    shows status and a live timeline. The agent's questions appear as cards on the run
    page and in the **Inbox**; answering unblocks it. `submit_result` finishes the run.
 
-Without `JARVIS2_LIVE=1` the same flow is a dry-run: the run is recorded and the planned Herdr calls are
-shown in its timeline, but nothing is started. `MODEL=luna scripts/live-tour.sh` sets up an isolated Herdr
-session for a manual showcase (it uses your real Pi configuration and OpenRouter credits).
+`MODEL=luna scripts/live-tour.sh` sets up an isolated Herdr session for a manual showcase
+(it uses your real Pi configuration and OpenRouter credits).
 
 For an agent to call Jarvis2's tools, Pi needs the `jarvis2` MCP server. The repository's `.pi/mcp.json`
 (used after Pi project trust) sends `X-Herdr-Pane` and `X-Herdr-Workspace` from the pane environment.
@@ -55,7 +53,7 @@ For runs started in other directories, add the same `jarvis2` entry, including t
 
 | Route                             | Purpose                                                                                                                               |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`                               | Dashboard: connection, live/dry badge, workspace → tab → pane tree, agents, worktrees, layout diff, recent events, _Apply dev layout_ |
+| `/`                               | Dashboard: connection, workspace → tab → pane tree, agents, worktrees, layout diff, recent events, _Apply dev layout_ |
 | `/runs`, `/runs/new`, `/runs/:id` | Runs with status filter; start form; run page with questions, prompt box, timeline, stop; Mix jobs                     |
 | `/inbox`                          | Every pending question and approval, with a count badge in the navigation                                                             |
 | `/blackboard`                     | Notes shared between agents and you (JSON values)                                                                                     |
@@ -94,18 +92,19 @@ result submission or when the run stops, fails or is lost; a run may have five o
 
 ## Safety model
 
-- **Dry-run by default.** Real Herdr changes need `JARVIS2_LIVE=1` _and_ the action enabled in Settings
-  (`JARVIS2_SCENARIOS` can restrict what may be enabled). The environment is the ceiling; the database can
-  only narrow it.
+- **Dedicated session.** Jarvis2 creates and uses only the Herdr session `jarvis2`; it never stops or
+  deletes it. Runs make real changes in that session. Disabled scenario actions are refused;
+  `JARVIS2_SCENARIOS` can restrict which actions may be enabled in Settings.
 - **Loopback only.** Bound to `127.0.0.1`; requests with a non-loopback `Host` are refused (DNS rebinding);
   the LiveView socket checks origin; `/mcp` refuses browser origins. Sign-in uses single-use codes and a
   signed session cookie.
 - **MCP identity is unauthenticated.** `X-Herdr-Pane` selects an active run, including one that has
   submitted a result. Any local process can claim another pane and call MCP tools or answer for its run.
   A fresh mirror checks the recorded terminal against the pane. Loopback binding, Host and Origin checks,
-  dry-run gates, execution/prompt guards and rate limits remain in place.
-- **Same guards for UI and MCP.** UI actions act as the system caller `ui` through the execution and prompt
-  guards and are audited as `fleet.*` events; they skip only the "caller must be a detected agent" check.
+  scenario gates, execution/prompt guards and rate limits remain in place.
+- **Guarded UI and MCP.** UI run actions act as the system caller `ui` through the execution and prompt
+  guards and are audited as `fleet.*` events. They skip scenario toggles and the "caller must be a detected
+  agent" check; other guard checks still apply.
 - **Redaction.** Prompt, command and summary text, blackboard values and matched output lines are never stored in
   the journal (only their sizes); credential-looking keys and bearer strings are masked.
 
@@ -115,8 +114,8 @@ agent in the same workspace, refuses self-prompts and cycles, and allows four at
 serialise per caller. These are process-local limits, not a security boundary: pane headers are advisory, state
 is not shared between instances, and Herdr offers no atomic expected-occupant check. `run_command` sends one
 shell line to the new pane and is **not sandboxed**. `run_mix` runs an allow-listed task (`test`, `compile`,
-`format --check-formatted`) in the project where the server started; it executes that project's code, even in
-dry-run, and needs GNU `timeout`. Herdr serves one request per connection, so Jarvis2 opens one per request.
+`format --check-formatted`) in the project where the server started; it executes that project's code
+and needs GNU `timeout`. Herdr serves one request per connection, so Jarvis2 opens one per request.
 
 ## Automations
 
@@ -130,7 +129,8 @@ Enabled from Settings, each records `automation.*` rows in the journal:
 - `output_watcher`: notification when watched pane output matches.
 - `sidebar_tokens` / `pane_hygiene`: `$agent_state` and `$last_tool` sidebar tokens (60 s TTL) and
   pane/tab renaming, which can overwrite manual labels; see `examples/herdr-config.snippet.toml`.
-- `custom_worker`: shows a running `run_mix` job as a `jarvis2-mix` agent on the server's own pane.
+  The shared Herdr configuration also applies when you attach to `jarvis2`.
+- `custom_worker`: shows a running `run_mix` job on the server's own pane, if it is in the dedicated session.
 - `declarative_layout`: the _dev_ layout, a **new** tab with three labelled shells.
 
 ## Development

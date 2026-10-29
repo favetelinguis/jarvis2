@@ -99,7 +99,7 @@ defmodule Jarvis2.MCPTest do
     assert identity["pane"] == "w1:p1"
     assert identity["workspace"] == "w1"
     assert identity["agent_kind"] == "pi"
-    assert identity["mode"] == "dry"
+    refute Map.has_key?(identity, "mode")
     key = "mcp-#{System.unique_integer([:positive])}"
 
     assert call_tool(ctx, headers, "blackboard_put", %{key: key, value: %{answer: 42}})["ok"] ==
@@ -120,7 +120,13 @@ defmodule Jarvis2.MCPTest do
              %{"path" => "/repo/other"}
            ]
 
-    assert call_tool(ctx, headers, "notify_human", %{title: "hello"})["dry_run"] == true
+    assert {200, _, %{"result" => %{"isError" => true}}} =
+             rpc(ctx, headers, %{
+               jsonrpc: "2.0",
+               id: 33,
+               method: "tools/call",
+               params: %{name: "notify_human", arguments: %{title: "hello"}}
+             })
 
     {200, _, %{"result" => %{"resources" => resources}}} =
       rpc(ctx, headers, %{jsonrpc: "2.0", id: 3, method: "resources/list"})
@@ -271,7 +277,7 @@ defmodule Jarvis2.MCPTest do
              })
   end
 
-  test "apply_layout returns a dry-run plan for the calling workspace", ctx do
+  test "apply_layout refuses when disabled", ctx do
     {session, protocol} = initialize(ctx)
 
     headers = [
@@ -282,9 +288,14 @@ defmodule Jarvis2.MCPTest do
     ]
 
     rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
-    result = call_tool(ctx, headers, "apply_layout", %{name: "dev"})
-    assert result["dry_run"] == true and result["workspace_id"] == "w1"
-    assert result["root"]["type"] == "split"
+
+    assert {200, _, %{"result" => %{"isError" => true}}} =
+             rpc(ctx, headers, %{
+               jsonrpc: "2.0",
+               id: 28,
+               method: "tools/call",
+               params: %{name: "apply_layout", arguments: %{name: "dev"}}
+             })
 
     {200, _, %{"error" => _}} =
       rpc(ctx, headers, %{
@@ -354,7 +365,6 @@ defmodule Jarvis2.MCPTest do
     end)
 
     replace_config(:herdr_socket, socket)
-    replace_config(:live, true)
     replace_config(:live_scenarios, [:declarative_layout])
     {session, protocol} = initialize(ctx)
     base = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]

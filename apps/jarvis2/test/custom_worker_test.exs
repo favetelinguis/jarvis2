@@ -88,18 +88,11 @@ defmodule Jarvis2.CustomWorkerTest do
     {:ok, _, listener} = Jarvis2.Test.FakeHerdr.start_link(path, handler)
     socket = start_supervised!({Jarvis2.Herdr.Socket, [name: nil, path: path]})
     replace_config(:herdr_socket, socket)
-    replace_config(:live, true)
     replace_config(:live_scenarios, [:custom_worker])
     replace_config(:mix_project_dir, File.cwd!())
     replace_config(:mix_executable, "/bin/echo")
-    previous = System.get_env("HERDR_PANE_ID")
-    System.put_env("HERDR_PANE_ID", "w1:p1")
 
     on_exit(fn ->
-      if previous,
-        do: System.put_env("HERDR_PANE_ID", previous),
-        else: System.delete_env("HERDR_PANE_ID")
-
       :gen_tcp.close(listener)
       File.rm_rf!(dir)
     end)

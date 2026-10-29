@@ -5,20 +5,17 @@ defmodule Jarvis2.AutomationsTest do
   alias Jarvis2.Automations.{Attention, OutputWatcher}
 
   setup do
-    previous_live = Application.get_env(:jarvis2, :live, false)
     previous_scenarios = Application.get_env(:jarvis2, :live_scenarios, [])
-    Application.put_env(:jarvis2, :live, false)
     Application.put_env(:jarvis2, :live_scenarios, [])
 
     on_exit(fn ->
-      Application.put_env(:jarvis2, :live, previous_live)
       Application.put_env(:jarvis2, :live_scenarios, previous_scenarios)
     end)
 
     :ok
   end
 
-  test "output watcher logs metadata without exposing the matched line in dry mode" do
+  test "disabled output watcher refuses the notification without exposing its contents" do
     start_supervised!({OutputWatcher, [name: nil]})
     Phoenix.PubSub.subscribe(Jarvis2.PubSub, "scenario:output_watcher")
 
@@ -34,15 +31,14 @@ defmodule Jarvis2.AutomationsTest do
            }}
         )
 
-        assert_receive {:jarvis2, "scenario:output_watcher", %{pane: "w1:p1", dry_run: true}},
+        assert_receive {:jarvis2, "scenario:output_watcher", %{pane: "w1:p1", outcome: :refused}},
                        1_000
       end)
 
-    assert log =~ "would call"
     assert log =~ "pane=\"w1:p1\""
     refute log =~ "private-value"
 
-    assert [%{type: "automation.output_watcher", outcome: :dry_run, payload: payload}] =
+    assert [%{type: "automation.output_watcher", outcome: :refused, payload: payload}] =
              Jarvis2.Journal.recent(source: :automation)
 
     assert payload == %{"pane" => "w1:p1"}
@@ -89,12 +85,16 @@ defmodule Jarvis2.AutomationsTest do
         assert_receive {:jarvis2, "scenario:attention", %{pane: "w1:p1", state: "cleared"}}, 1_000
       end)
 
-    assert log =~ "notification.show"
-    assert log =~ "client.window_title.set"
-    assert log =~ "client.window_title.clear"
+    assert log =~ "Herdr attention"
 
     # One notification for the transition, none for the repeat.
-    assert [%{type: "automation.attention", payload: %{"pane" => "w1:p1", "state" => "blocked"}}] =
+    assert [
+             %{
+               type: "automation.attention",
+               outcome: :refused,
+               payload: %{"pane" => "w1:p1", "state" => "blocked"}
+             }
+           ] =
              Jarvis2.Journal.recent(source: :automation)
   end
 
@@ -120,7 +120,6 @@ defmodule Jarvis2.AutomationsTest do
       File.rm(path)
     end)
 
-    Application.put_env(:jarvis2, :live, true)
     Application.put_env(:jarvis2, :live_scenarios, [:attention, :output_watcher])
     start_supervised!({Attention, [name: nil, socket: socket]})
     start_supervised!({OutputWatcher, [name: nil, socket: socket]})
@@ -183,6 +182,6 @@ defmodule Jarvis2.AutomationsTest do
                     %{"method" => "notification.show", "params" => %{"body" => "FAIL test"}}},
                    1_000
 
-    assert_receive {:jarvis2, "scenario:output_watcher", %{pane: "w1:p1", dry_run: false}}, 1_000
+    assert_receive {:jarvis2, "scenario:output_watcher", %{pane: "w1:p1", outcome: :ok}}, 1_000
   end
 end

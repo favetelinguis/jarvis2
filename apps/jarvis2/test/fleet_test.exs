@@ -8,7 +8,7 @@ defmodule Jarvis2.FleetTest do
 
   test "audit records the outcome of each result kind without altering it" do
     results = [
-      {{:ok, %{dry_run: true}}, :dry_run},
+      {{:error, %{code: "disabled"}}, :refused},
       {{:ok, %{pane_id: "w1:p2"}}, :ok},
       {{:error, %{code: "prompt_cycle_refused"}}, :refused},
       {{:error, %{code: "rate_limited"}}, :refused},
@@ -43,15 +43,15 @@ defmodule Jarvis2.FleetTest do
     guard = start_supervised!({ExecutionGuard, [name: nil]})
     ui = %{system: "ui", pane: "system:ui"}
 
-    assert {:ok, ^ui, lease} = ExecutionGuard.reserve(ui, :dry, guard)
+    assert {:ok, ^ui, lease} = ExecutionGuard.reserve(ui, guard)
 
     assert {:error, "caller execution is busy or cooling down"} =
-             ExecutionGuard.reserve(ui, :dry, guard)
+             ExecutionGuard.reserve(ui, guard)
 
     ExecutionGuard.finish(lease, :ok, guard)
-    assert {:ok, _, _} = ExecutionGuard.reserve(ui, :dry, guard)
+    assert {:ok, _, _} = ExecutionGuard.reserve(ui, guard)
 
-    assert {:error, _} = ExecutionGuard.reserve(%{pane: "system:fake"}, :dry, guard)
-    assert {:error, _} = ExecutionGuard.reserve(%{system: "", pane: "system:x"}, :dry, guard)
+    assert {:error, _} = ExecutionGuard.reserve(%{pane: "system:fake"}, guard)
+    assert {:error, _} = ExecutionGuard.reserve(%{system: "", pane: "system:x"}, guard)
   end
 end

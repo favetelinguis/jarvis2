@@ -9,15 +9,16 @@ defmodule Jarvis2Web.RunLiveTest do
     def start_link(view), do: GenServer.start_link(__MODULE__, view)
     def init(view), do: {:ok, view}
     def handle_call(:get, _from, view), do: {:reply, view, view}
+    def handle_call({:put, view}, _from, _), do: {:reply, :ok, view}
+    def handle_cast(:invalidate, view), do: {:noreply, view}
   end
 
   setup %{conn: conn} do
     previous =
-      for key <- [:live, :live_scenarios],
+      for key <- [:live_scenarios],
           into: %{},
           do: {key, Application.fetch_env(:jarvis2, key)}
 
-    Application.put_env(:jarvis2, :live, false)
     Application.put_env(:jarvis2, :live_scenarios, [])
 
     # A private guard keeps these launches out of the shared per-minute rate limit.
@@ -63,9 +64,9 @@ defmodule Jarvis2Web.RunLiveTest do
       assert has_element?(view, "#run-#{two.id}")
 
       Runs.launch(two)
-      assert has_element?(view, "#run-#{two.id} .badge-dry_run")
+      assert has_element?(view, "#run-#{two.id} .badge-failed")
 
-      {:ok, filtered, _} = live(conn, "/runs?status=dry_run")
+      {:ok, filtered, _} = live(conn, "/runs?status=failed")
       assert has_element?(filtered, "#run-#{two.id}")
       refute has_element?(filtered, "#run-#{one.id}")
     end
@@ -112,8 +113,7 @@ defmodule Jarvis2Web.RunLiveTest do
 
   describe "new" do
     test "prefills the Pi, luna and low defaults", %{conn: conn} do
-      {:ok, view, html} = live(conn, "/runs/new")
-      assert html =~ "Dry-run"
+      {:ok, view, _html} = live(conn, "/runs/new")
 
       assert has_element?(
                view,
@@ -136,7 +136,8 @@ defmodule Jarvis2Web.RunLiveTest do
       assert html =~ "can&#39;t be blank"
     end
 
-    test "a dry-run start creates the run and shows its plan", %{conn: conn} do
+    test "a start creates the run and sends it to Herdr", %{conn: conn} do
+      start_fake_launcher()
       {:ok, view, _} = live(conn, "/runs/new")
 
       {:ok, show, html} =
@@ -149,15 +150,15 @@ defmodule Jarvis2Web.RunLiveTest do
       [run] = Runs.list_runs()
       assert run.name == "demo"
 
-      # The launch runs in the background and ends in dry_run with the planned calls recorded.
-      assert_eventually(fn -> has_element?(show, ".badge-dry_run") end)
-      assert render(show) =~ "pane.split"
-      assert render(show) =~ "agent.start"
+      assert_eventually(fn -> has_element?(show, ".badge-working") end)
+      assert_receive {:request, "pane.split"}
+      assert_receive {:request, "agent.start"}
+      assert_receive {:request, "agent.prompt"}
+      assert render(show) =~ "run.start"
       refute render(show) =~ "private task"
     end
 
     test "live mode without Herdr explains why start is disabled", %{conn: conn} do
-      Application.put_env(:jarvis2, :live, true)
       Application.put_env(:jarvis2, :live_scenarios, [:agent_spawn, :agent_prompt])
       previous = Application.fetch_env(:jarvis2, :mirror)
       Application.put_env(:jarvis2, :mirror, :nonexistent_mirror)
@@ -192,7 +193,7 @@ defmodule Jarvis2Web.RunLiveTest do
       assert html =~ "run.created"
 
       Runs.launch(run)
-      assert has_element?(view, ".badge-dry_run")
+      assert has_element?(view, ".badge-failed")
       assert render(view) =~ "run.start"
     end
 
@@ -259,9 +260,8 @@ defmodule Jarvis2Web.RunLiveTest do
       refute has_element?(view, "h2", "Terminal")
     end
 
-    test "a dry-run can be stopped from the page", %{conn: conn} do
+    test "a starting run without a pane can be stopped from the page", %{conn: conn} do
       {:ok, run} = Runs.create_run(%{name: "stop me", task: "t", cwd: File.cwd!()})
-      Runs.launch(run)
       {:ok, view, _} = live(conn, "/runs/#{run.id}")
 
       view |> element("#stop") |> render_click()
@@ -281,6 +281,105 @@ defmodule Jarvis2Web.RunLiveTest do
       {:ok, view, _} = live(conn, "/runs/#{run.id}")
       assert has_element?(view, "#run-error", "no pane")
     end
+  end
+
+  defp start_fake_launcher do
+    anchor = %{
+      "pane_id" => "w1:p1",
+      "workspace_id" => "w1",
+      "tab_id" => "w1:t1",
+      "terminal_id" => "anchor",
+      "cwd" => File.cwd!()
+    }
+
+    pane = %{
+      "pane_id" => "w1:p9",
+      "workspace_id" => "w1",
+      "tab_id" => "w1:t1",
+      "terminal_id" => "run"
+    }
+
+    snapshot = %{
+      "workspaces" => [%{"workspace_id" => "w1", "label" => "jarvis2"}],
+      "panes" => [anchor],
+      "agents" => []
+    }
+
+    mirror = start_supervised!({Mirror, %{stale: false, snapshot: snapshot}})
+    prompt_guard = start_supervised!({Jarvis2.Herdr.PromptGuard, [name: nil]})
+
+    path =
+      Path.join(
+        Application.fetch_env!(:jarvis2, :state_dir),
+        "ui-launch-#{System.unique_integer([:positive])}"
+      )
+
+    parent = self()
+
+    {:ok, _, listener} =
+      Jarvis2.Test.FakeHerdr.start_link(path, fn request ->
+        method = request["method"]
+        send(parent, {:request, method})
+
+        result =
+          case method do
+            "pane.split" ->
+              %{type: "pane_info", pane: pane}
+
+            "pane.process_info" ->
+              %{
+                process_info: %{
+                  pane_id: "w1:p9",
+                  shell_pid: 7,
+                  foreground_process_group_id: 7,
+                  foreground_processes: [%{pid: 7}]
+                }
+              }
+
+            "agent.start" ->
+              agent =
+                Map.merge(pane, %{"agent" => "pi", "agent_status" => "idle", "name" => "worker"})
+
+              :ok =
+                GenServer.call(
+                  mirror,
+                  {:put,
+                   %{
+                     stale: false,
+                     snapshot: %{snapshot | "panes" => [anchor, pane], "agents" => [agent]}
+                   }}
+                )
+
+              %{type: "agent_started", agent: agent}
+
+            "agent.prompt" ->
+              %{type: "agent_prompt", submitted: true}
+          end
+
+        {:reply, %{result: result}}
+      end)
+
+    socket = start_supervised!({Jarvis2.Herdr.Socket, [path: path, name: nil]})
+
+    on_exit(fn ->
+      :gen_tcp.close(listener)
+      File.rm(path)
+    end)
+
+    for {key, value} <- [mirror: mirror, herdr_socket: socket, prompt_guard: prompt_guard],
+        do: config(key, value)
+  end
+
+  defp config(key, value) do
+    old = Application.fetch_env(:jarvis2, key)
+    Application.put_env(:jarvis2, key, value)
+
+    on_exit(fn ->
+      case old do
+        {:ok, previous} -> Application.put_env(:jarvis2, key, previous)
+        :error -> Application.delete_env(:jarvis2, key)
+      end
+    end)
   end
 
   defp assert_eventually(fun, attempts \\ 40) do

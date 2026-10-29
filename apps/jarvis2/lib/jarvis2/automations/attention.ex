@@ -73,17 +73,19 @@ defmodule Jarvis2.Automations.Attention do
 
     sound = if status == "blocked", do: "request", else: "done"
 
-    invoke(state, pane, "notification.show", %{
-      title: "Agent #{status}",
-      body: "Pane #{pane} is #{status}",
-      sound: sound
-    })
+    notification =
+      invoke(state, pane, "notification.show", %{
+        title: "Agent #{status}",
+        body: "Pane #{pane} is #{status}",
+        sound: sound
+      })
 
-    invoke(state, pane, "client.window_title.set", %{title: "Jarvis2: agent #{status}"})
+    title = invoke(state, pane, "client.window_title.set", %{title: "Jarvis2: agent #{status}"})
 
     Jarvis2.Journal.record(%{
       source: :automation,
       type: "automation.attention",
+      outcome: outcome(notification, title),
       payload: %{pane: pane, state: status}
     })
 
@@ -119,6 +121,11 @@ defmodule Jarvis2.Automations.Attention do
       state
     end
   end
+
+  defp outcome({:error, %{code: "disabled"}}, _), do: :refused
+  defp outcome(_, {:error, %{code: "disabled"}}), do: :refused
+  defp outcome({:ok, _}, {:ok, _}), do: :ok
+  defp outcome(_, _), do: :error
 
   defp invoke(state, pane, method, params),
     do: Actions.call(:attention, method, params, server: state.socket, caller: pane)

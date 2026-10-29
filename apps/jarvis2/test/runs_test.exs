@@ -49,8 +49,7 @@ defmodule Jarvis2.RunsTest do
     config(:execution_guard, exec)
     config(:prompt_guard, prompts)
     config(:herdr_socket, socket)
-    config(:anchor_pane, nil)
-    config(:live, false)
+    config(:mix_project_dir, dir)
     config(:live_scenarios, [])
     %{mirror: mirror, behavior: behavior, cwd: dir}
   end
@@ -84,23 +83,12 @@ defmodule Jarvis2.RunsTest do
   end
 
   describe "launch/1" do
-    test "in dry mode records the plan and sends nothing to Herdr", %{cwd: cwd} do
+    test "starts a real run even when agent scenarios are disabled", %{cwd: cwd} do
       {:ok, run} = Runs.create_run(%{name: "demo", task: "private task", cwd: cwd})
-      assert %Run{status: :dry_run, pane_id: nil} = Runs.launch(run)
-      refute_receive {:request, _, _}, 100
-
-      event = Enum.find(Journal.recent(run_id: run.id), &(&1.type == "run.start"))
-      assert event.outcome == :dry_run
-
-      assert [%{"method" => "pane.split"}, %{"method" => "agent.start"} = start, _prompt] =
-               event.payload["planned"]
-
-      [split | _] = event.payload["planned"]
-      assert split["params"]["env_keys"] == ["JARVIS2_MCP_URL", "JARVIS2_RUN_ID"]
-
-      assert start["params"]["args"] ==
-               ~w(--provider openrouter --model openai/gpt-6-luna --thinking low)
-
+      assert %Run{status: :working} = Runs.launch(run)
+      assert_receive {:request, "pane.split", _}
+      assert_receive {:request, "agent.start", _}
+      assert_receive {:request, "agent.prompt", _}
       refute inspect(Journal.recent()) =~ "private task"
     end
 
@@ -153,17 +141,47 @@ defmodule Jarvis2.RunsTest do
       refute_receive {:request, "agent.start", _}, 100
     end
 
-    test "live mode without an anchor pane fails before touching Herdr", ctx do
+    test "creates the workspace when no anchor exists", ctx do
       live!()
-
-      :ok =
-        GenServer.call(ctx.mirror, {:put, put_in(view(), [:snapshot, "focused_pane_id"], nil)})
-
+      empty = update_in(view(), [:snapshot], &Map.merge(&1, %{"workspaces" => [], "panes" => []}))
+      :ok = GenServer.call(ctx.mirror, {:put, empty})
       {:ok, run} = Runs.create_run(%{name: "demo", task: "t", cwd: ctx.cwd})
 
-      assert %Run{status: :failed, result: %{"error" => error}} = Runs.launch(run)
-      assert error =~ "No pane to split from"
-      refute_receive {:request, _, _}, 100
+      assert %Run{status: :working} = Runs.launch(run)
+
+      assert_receive {:request, "workspace.create",
+                      %{"label" => "jarvis2", "cwd" => cwd, "focus" => false}}
+
+      assert cwd == ctx.cwd
+      assert_receive {:request, "pane.split", %{"target_pane_id" => "w1:p1"}}
+    end
+
+    test "a rejected workspace creation does not split a pane", ctx do
+      live!()
+      empty = update_in(view(), [:snapshot], &Map.merge(&1, %{"workspaces" => [], "panes" => []}))
+      :ok = GenServer.call(ctx.mirror, {:put, empty})
+      Agent.update(ctx.behavior, &Map.put(&1, "workspace.create", {:error, "invalid_request"}))
+      {:ok, run} = Runs.create_run(%{name: "demo", task: "t", cwd: ctx.cwd})
+      assert %Run{status: :failed, result: %{"error" => message}} = Runs.launch(run)
+      assert message =~ "inspect the session before retrying"
+      assert_receive {:request, "workspace.create", _}
+      refute_receive {:request, "pane.split", _}, 100
+    end
+
+    test "anchor ignores focused panes in other workspaces" do
+      other = %{"workspace_id" => "w2", "label" => "other"}
+      other_pane = %{"workspace_id" => "w2", "pane_id" => "w2:p1"}
+
+      snapshot =
+        view().snapshot
+        |> Map.put("focused_pane_id", "w2:p1")
+        |> Map.update!("workspaces", &[other | &1])
+        |> Map.update!("panes", &[other_pane | &1])
+
+      assert {:ok, %{"pane_id" => "w1:p1"}} = Launcher.anchor(%{snapshot: snapshot})
+
+      assert {:error, :no_anchor} =
+               Launcher.anchor(%{snapshot: %{snapshot | "workspaces" => [other]}})
     end
 
     test "an unconfirmed task is reported but the run keeps its pane", ctx do
@@ -184,16 +202,14 @@ defmodule Jarvis2.RunsTest do
     end
 
     test "Launcher.availability explains why a live start is impossible", ctx do
-      assert :ok = Launcher.availability(nil)
-      live!()
+      assert {:error, "Herdr is not connected" <> _} = Launcher.availability(nil)
 
       assert {:error, "Herdr is not connected" <> _} =
                Launcher.availability(%{stale: true, snapshot: nil})
 
       assert :ok = Launcher.availability(view())
 
-      assert {:error, "No pane to split from" <> _} =
-               Launcher.availability(put_in(view(), [:snapshot, "focused_pane_id"], nil))
+      assert :ok = Launcher.availability(put_in(view(), [:snapshot, "workspaces"], []))
 
       _ = ctx
     end
@@ -414,7 +430,6 @@ defmodule Jarvis2.RunsTest do
   end
 
   defp live! do
-    config(:live, true)
     config(:live_scenarios, [:agent_spawn, :agent_prompt])
   end
 
@@ -422,6 +437,11 @@ defmodule Jarvis2.RunsTest do
     case behavior[method] do
       {:error, code} -> {:reply, %{error: %{code: code, message: "simulated"}}}
     end
+  end
+
+  defp respond(%{"method" => "workspace.create"}, _mirror, _) do
+    pane = %{pane_id: "w1:p1", terminal_id: "term-anchor", workspace_id: "w1", tab_id: "w1:t1"}
+    {:reply, %{result: %{type: "workspace_created", root_pane: pane}}}
   end
 
   defp respond(%{"method" => "pane.split"}, _mirror, _) do
@@ -458,7 +478,7 @@ defmodule Jarvis2.RunsTest do
       worktree_errors: %{},
       layout_diff: nil,
       snapshot: %{
-        "workspaces" => [%{"workspace_id" => "w1"}],
+        "workspaces" => [%{"workspace_id" => "w1", "label" => "jarvis2"}],
         "tabs" => [%{"workspace_id" => "w1", "tab_id" => "w1:t1"}],
         "panes" => [
           %{

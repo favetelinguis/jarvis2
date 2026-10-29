@@ -4,7 +4,7 @@ defmodule Jarvis2Web.SettingsLiveTest do
   alias Jarvis2.Settings
 
   setup %{conn: conn} do
-    for key <- [:live_scenarios, :allowed_scenarios, :live] do
+    for key <- [:live_scenarios, :allowed_scenarios] do
       old = Application.fetch_env(:jarvis2, key)
 
       on_exit(fn ->
@@ -16,7 +16,6 @@ defmodule Jarvis2Web.SettingsLiveTest do
     end
 
     Application.delete_env(:jarvis2, :allowed_scenarios)
-    Application.put_env(:jarvis2, :live, false)
     %{conn: sign_in(conn)}
   end
 
@@ -25,9 +24,9 @@ defmodule Jarvis2Web.SettingsLiveTest do
     assert redirected_to(get(conn, "/settings")) == "/login"
   end
 
-  test "explains dry-run and saves toggles and defaults", %{conn: conn} do
+  test "explains the scenario ceiling and saves toggles and defaults", %{conn: conn} do
     {:ok, view, html} = live(conn, "/settings")
-    assert html =~ "dry-run mode"
+    assert html =~ "JARVIS2_SCENARIOS"
     refute has_element?(view, ~s(input[value="agent_spawn"][checked]))
 
     view

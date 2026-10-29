@@ -1,8 +1,7 @@
 defmodule Jarvis2.Runs.Launcher do
   @moduledoc """
   Performs the Herdr side of a run: split a pane next to an anchor pane, start the agent in it and
-  deliver the task. The UI acts as the named system caller `ui`, so the execution and prompt guards
-  and the live/dry-run gates apply exactly as they do for MCP callers.
+  deliver the task. The UI acts as the named system caller `ui` through the execution and prompt guards.
   """
   require Logger
 
@@ -10,45 +9,15 @@ defmodule Jarvis2.Runs.Launcher do
   alias Jarvis2.Herdr.{Actions, ExecutionGuard, Mirror, Socket}
   alias Jarvis2.Runs.Run
 
+  @workspace_label "jarvis2"
   @ui %{system: "ui", pane: "system:ui"}
   @prompt_wait_ms 15_000
   @retryable ~w(target_unavailable target_not_ready caller_or_mirror_unavailable)
 
   def caller(%Run{id: id}), do: Map.put(@ui, :run_id, id)
 
-  @doc "`:live` only when live mode and both the spawn and prompt scenarios are enabled."
-  def mode, do: if(scenario?(:agent_spawn) and scenario?(:agent_prompt), do: :live, else: :dry)
-
   @doc "Whether a run could be started now; the error is shown to the user."
-  def availability(view) do
-    case mode() do
-      :dry ->
-        :ok
-
-      :live ->
-        with {:ok, _} <- fresh(view), {:ok, _} <- anchor(view), do: :ok
-    end
-  end
-
-  @doc "The Herdr calls a start would make, without making them."
-  def plan(%Run{} = run, anchor_pane_id) do
-    [
-      %{
-        method: "pane.split",
-        params: %{
-          target_pane_id: anchor_pane_id,
-          direction: "right",
-          cwd: run.cwd,
-          env_keys: Enum.sort(Map.keys(env(run)))
-        }
-      },
-      %{
-        method: "agent.start",
-        params: %{name: agent_name(run), kind: run.kind, args: agent_args(run)}
-      },
-      %{method: "agent.prompt", params: %{target: "<new pane>", text_bytes: byte_size(run.task)}}
-    ]
-  end
+  def availability(view), do: with({:ok, _} <- fresh(view), do: :ok)
 
   def agent_name(%Run{id: id}), do: "run-" <> String.slice(id, 0, 8)
 
@@ -62,13 +31,11 @@ defmodule Jarvis2.Runs.Launcher do
 
   @doc "Starts the run's agent. Returns the details to store on the run."
   def start(%Run{} = run) do
-    mode = mode()
-
     guard = Application.get_env(:jarvis2, :execution_guard, ExecutionGuard)
 
-    case ExecutionGuard.reserve(caller(run), mode, guard) do
+    case ExecutionGuard.reserve(caller(run), guard) do
       {:ok, _verified, lease} ->
-        result = guarded(fn -> execute(run, mode) end)
+        result = guarded(fn -> execute(run) end)
 
         ExecutionGuard.finish(
           lease,
@@ -84,7 +51,7 @@ defmodule Jarvis2.Runs.Launcher do
   end
 
   @doc "Closes the run's pane, but only if it is still the terminal that was created for it."
-  def close(%Run{pane_id: nil}), do: {:ok, :dry_run}
+  def close(%Run{pane_id: nil}), do: {:ok, :gone}
 
   def close(%Run{} = run) do
     with {:ok, view} <- fresh(current_view()) do
@@ -96,25 +63,17 @@ defmodule Jarvis2.Runs.Launcher do
   end
 
   defp close_pane(pane_id) do
-    case Actions.call(:agent_spawn, "pane.close", %{pane_id: pane_id},
-           caller: "ui",
-           server: socket()
-         ) do
-      {:ok, %{dry_run: true}} -> {:ok, :dry_run}
+    case Socket.request("pane.close", %{pane_id: pane_id}, server: socket()) do
       {:ok, _} -> {:ok, :closed}
       {:error, _} -> {:error, "Herdr could not close the pane"}
     end
   end
 
-  @doc "Brings the run's agent to the front in Herdr (live mode only)."
+  @doc "Brings the run's agent to the front in Herdr."
   def focus(%Run{pane_id: pane_id} = run) when is_binary(pane_id) do
     with {:ok, view} <- fresh(current_view()),
          {_pane, _agent} <- find(run, view) || {:error, "The run's pane is gone."} do
-      case Actions.call(:agent_spawn, "agent.focus", %{target: pane_id},
-             caller: "ui",
-             server: socket()
-           ) do
-        {:ok, %{dry_run: true}} -> {:ok, :dry_run}
+      case Socket.request("agent.focus", %{target: pane_id}, server: socket()) do
         {:ok, _} -> {:ok, :focused}
         {:error, _} -> {:error, "Herdr could not focus the pane."}
       end
@@ -154,30 +113,44 @@ defmodule Jarvis2.Runs.Launcher do
 
   def find(_run, _view), do: nil
 
-  defp execute(run, :dry) do
-    anchor =
-      case anchor(current_view()) do
-        {:ok, pane} -> pane["pane_id"]
-        _ -> nil
-      end
-
-    {:ok, %{mode: :dry, plan: plan(run, anchor)}}
-  end
-
-  defp execute(run, :live) do
+  defp execute(run) do
     with {:ok, view} <- fresh(current_view()),
-         {:ok, anchor} <- anchor(view),
+         {:ok, anchor} <- ensure_anchor(view),
          {:ok, pane} <- split(run, anchor),
          :ok <- shell_ready(pane),
          {:ok, _agent} <- start_agent(run, pane) do
       {:ok,
        %{
-         mode: :live,
          pane_id: pane["pane_id"],
          terminal_id: pane["terminal_id"],
          agent_name: agent_name(run),
          prompt: send_task(run, pane["pane_id"])
        }}
+    end
+  end
+
+  defp ensure_anchor(view) do
+    case anchor(view) do
+      {:ok, pane} -> {:ok, pane}
+      {:error, :no_anchor} -> create_anchor()
+      error -> error
+    end
+  end
+
+  defp create_anchor do
+    params = %{
+      label: @workspace_label,
+      cwd: Application.get_env(:jarvis2, :mix_project_dir, File.cwd!()),
+      focus: false
+    }
+
+    case Socket.request("workspace.create", params, server: socket(), timeout: 5_000) do
+      {:ok, %{"root_pane" => %{"pane_id" => id} = pane}} when is_binary(id) and id != "" ->
+        Mirror.invalidate(mirror())
+        {:ok, pane}
+
+      _ ->
+        {:error, "Could not create the jarvis2 workspace; inspect the session before retrying."}
     end
   end
 
@@ -275,17 +248,11 @@ defmodule Jarvis2.Runs.Launcher do
   end
 
   @doc false
-  def anchor(%{snapshot: %{"panes" => panes} = snapshot}) when is_list(panes) do
-    candidates = [Application.get_env(:jarvis2, :anchor_pane), snapshot["focused_pane_id"]]
-
-    Enum.find_value(
-      candidates,
-      {:error, "No pane to split from: run Jarvis2 inside Herdr or focus a pane."},
-      fn id ->
-        pane = id && Enum.find(panes, &(&1["pane_id"] == id))
-        pane && {:ok, pane}
-      end
-    )
+  def anchor(%{snapshot: %{"panes" => panes, "workspaces" => workspaces}})
+      when is_list(panes) and is_list(workspaces) do
+    workspace = Enum.find(workspaces, &(&1["label"] == @workspace_label))
+    pane = workspace && Enum.find(panes, &(&1["workspace_id"] == workspace["workspace_id"]))
+    if pane, do: {:ok, pane}, else: {:error, :no_anchor}
   end
 
   def anchor(_view), do: {:error, "Herdr is not connected."}
@@ -314,11 +281,6 @@ defmodule Jarvis2.Runs.Launcher do
   catch
     :exit, _ -> nil
   end
-
-  defp scenario?(name),
-    do:
-      Application.get_env(:jarvis2, :live, false) and
-        name in Application.get_env(:jarvis2, :live_scenarios, [])
 
   defp mirror, do: Application.get_env(:jarvis2, :mirror, Mirror)
   defp socket, do: Application.get_env(:jarvis2, :herdr_socket, Socket)

@@ -1,7 +1,9 @@
 defmodule Jarvis2.Core do
   @moduledoc false
 
-  def child_specs do
+  def child_specs(opts) do
+    socket = if opts[:path], do: [{Jarvis2.Herdr.Socket, path: opts[:path]}], else: []
+
     [
       {Phoenix.PubSub, name: Jarvis2.PubSub},
       Supervisor.child_spec({Registry, keys: :unique, name: Jarvis2.MixRegistry},
@@ -11,12 +13,14 @@ defmodule Jarvis2.Core do
       Jarvis2.LoginCodes,
       Jarvis2.Repo,
       {Ecto.Migrator, repos: Application.fetch_env!(:jarvis2, :ecto_repos)},
-      Jarvis2.Journal.Pruner,
-      Jarvis2.Herdr.Socket,
-      {Task.Supervisor, name: Jarvis2.TaskSupervisor},
-      Jarvis2.Herdr.Mirror,
-      Jarvis2.Herdr.PromptGuard,
-      Jarvis2.Herdr.ExecutionGuard
-    ]
+      Jarvis2.Journal.Pruner
+    ] ++
+      socket ++
+      [
+        {Task.Supervisor, name: Jarvis2.TaskSupervisor},
+        Jarvis2.Herdr.Mirror,
+        Jarvis2.Herdr.PromptGuard,
+        Jarvis2.Herdr.ExecutionGuard
+      ]
   end
 end

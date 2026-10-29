@@ -4,7 +4,8 @@ defmodule Jarvis2.Application do
 
   @impl true
   def start(_type, _args) do
-    children = Jarvis2.Core.child_specs()
+    path = herdr_path()
+    children = Jarvis2.Core.child_specs(path: path)
 
     children =
       if Application.get_env(:jarvis2, :automations, true) do
@@ -15,7 +16,8 @@ defmodule Jarvis2.Application do
 
     children =
       if Application.get_env(:jarvis2, :events, true) do
-        children ++ [Jarvis2.Herdr.Events]
+        if is_nil(path), do: raise("Herdr events require a configured session")
+        children ++ [{Jarvis2.Herdr.Events, path: path}]
       else
         children
       end
@@ -34,6 +36,19 @@ defmodule Jarvis2.Application do
 
       announce_login()
       started
+    end
+  end
+
+  defp herdr_path do
+    case Application.get_env(:jarvis2, :herdr_session) do
+      nil ->
+        nil
+
+      name ->
+        case Jarvis2.Herdr.Session.ensure(name) do
+          {:ok, path} -> path
+          {:error, reason} -> raise "Unable to ensure Herdr session #{inspect(name)}: #{reason}"
+        end
     end
   end
 

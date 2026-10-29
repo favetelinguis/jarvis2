@@ -22,7 +22,6 @@ defmodule Jarvis2Web.RunLive.Show do
         {:ok,
          socket
          |> assign(:run, run)
-         |> assign(:live?, Runs.Launcher.mode() == :live)
          |> assign(:questions, Questions.list_for_run(run.id))
          |> assign(:prompt_form, to_form(%{"text" => ""}, as: :prompt))
          |> stream(:events, events)}
@@ -55,7 +54,6 @@ defmodule Jarvis2Web.RunLive.Show do
 
   def handle_event("focus", _params, socket) do
     case Runs.focus_run(socket.assigns.run) do
-      {:ok, :dry_run} -> {:noreply, put_flash(socket, :info, "Dry-run: would focus the pane.")}
       {:ok, _} -> {:noreply, socket}
       {:error, message} -> {:noreply, put_flash(socket, :error, message)}
     end
@@ -77,7 +75,6 @@ defmodule Jarvis2Web.RunLive.Show do
     <p><.link navigate="/runs">← Runs</.link></p>
     <h1>{@run.name} <.status_badge status={@run.status} /></h1>
     <p>
-      <.live_badge live={@live?} />
       <span class="muted">
         {@run.kind}<span :if={@run.kind != "mix"}> · {@run.model} ({@run.thinking})</span>
         · <code>{@run.cwd}</code>
@@ -88,7 +85,7 @@ defmodule Jarvis2Web.RunLive.Show do
       {error}
     </p>
 
-    <p :if={Run.active?(@run) or @run.status == :dry_run} class="actions">
+    <p :if={Run.active?(@run)} class="actions">
       <button :if={@run.pane_id} phx-click="focus" id="focus">Open in Herdr</button>
       <button
         :if={@run.kind != "mix"}

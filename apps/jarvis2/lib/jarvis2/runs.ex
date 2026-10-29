@@ -84,12 +84,7 @@ defmodule Jarvis2.Runs do
   @doc "Runs the launch sequence for a `:starting` run and records the outcome."
   def launch(%Run{status: :starting} = run) do
     case Launcher.start(run) do
-      {:ok, %{mode: :dry, plan: plan}} ->
-        run
-        |> progress(%{status: :dry_run, started_at: now()})
-        |> record("run.start", %{mode: "dry", planned: plan}, :dry_run)
-
-      {:ok, %{mode: :live} = info} ->
+      {:ok, info} ->
         run
         |> progress(%{
           status: :working,
@@ -100,7 +95,7 @@ defmodule Jarvis2.Runs do
         })
         |> record(
           "run.start",
-          %{mode: "live", pane: info.pane_id, prompt: info.prompt},
+          %{pane: info.pane_id, prompt: info.prompt},
           if(info.prompt == "submitted", do: :ok, else: :error)
         )
 
@@ -168,7 +163,7 @@ defmodule Jarvis2.Runs do
   def stop_run(%Run{kind: "mix"}), do: {:error, "Mix runs finish on their own."}
 
   def stop_run(%Run{} = run) do
-    if Run.active?(run) or run.status == :dry_run do
+    if Run.active?(run) do
       run |> Launcher.close() |> finish_stop(run)
     else
       {:error, "The run is not active."}
@@ -178,7 +173,7 @@ defmodule Jarvis2.Runs do
   defp finish_stop({:ok, how}, run) do
     run
     |> progress(%{status: :stopped, finished_at: now()})
-    |> record("run.stop", %{pane: how}, if(how == :dry_run, do: :dry_run, else: :ok))
+    |> record("run.stop", %{pane: how}, :ok)
     |> then(&{:ok, &1})
   end
 

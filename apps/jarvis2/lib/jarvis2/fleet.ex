@@ -1,7 +1,7 @@
 defmodule Jarvis2.Fleet do
   @moduledoc """
   The one place where agents, panes and layouts are changed. MCP tools and the UI both call it, so
-  the live/dry-run gates and per-caller guards behind `Jarvis2.Herdr.Actions` apply to either, and
+  the scenario gates and per-caller guards behind `Jarvis2.Herdr.Actions` apply to either, and
   every attempt leaves an audit row in the journal with its outcome.
   """
   alias Jarvis2.Herdr.Actions
@@ -44,7 +44,6 @@ defmodule Jarvis2.Fleet do
     result
   end
 
-  defp outcome({:ok, %{dry_run: true}}), do: :dry_run
   defp outcome({:ok, _}), do: :ok
 
   defp outcome({:error, %{code: code}}) when is_binary(code), do: refusal(code)
@@ -52,8 +51,9 @@ defmodule Jarvis2.Fleet do
   defp outcome(_), do: :error
 
   defp refusal(reason) do
-    if reason =~ ~r/refused|rate.limit|busy|cooling|capacity|guard_unavailable|unavailable/,
-      do: :refused,
-      else: :error
+    if reason =~
+         ~r/disabled|refused|rate.limit|busy|cooling|capacity|guard_unavailable|unavailable/,
+       do: :refused,
+       else: :error
   end
 end

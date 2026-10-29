@@ -14,14 +14,13 @@ defmodule Jarvis2.Herdr.Events do
 
   @impl true
   def init(opts) do
+    path = Keyword.fetch!(opts, :path)
     Process.flag(:trap_exit, true)
     Phoenix.PubSub.subscribe(Jarvis2.PubSub, "mirror:updated")
 
     state = %{
       mirror: Keyword.get(opts, :mirror, Mirror),
-      path:
-        Keyword.get(opts, :path) || System.get_env("HERDR_SOCKET_PATH") ||
-          Path.expand("~/.config/herdr/herdr.sock"),
+      path: path,
       retry_ms: Keyword.get(opts, :retry_ms, 200),
       main: nil,
       panes: %{},

@@ -10,7 +10,7 @@ if config_env() == :test do
     automations: false,
     run_monitor: false,
     apply_settings: false,
-    live: false
+    herdr_session: nil
 
   config :jarvis2, Jarvis2Web.Endpoint,
     secret_key_base: String.duplicate("jarvis2-test-secret-", 4)
@@ -51,9 +51,8 @@ else
   config :jarvis2,
     port: port,
     state_dir: state_dir,
-    live: System.get_env("JARVIS2_LIVE") == "1",
     allowed_scenarios: allowed_scenarios,
-    anchor_pane: System.get_env("HERDR_PANE_ID"),
+    herdr_session: "jarvis2",
     mix_project_dir: File.cwd!()
 
   config :jarvis2, Jarvis2.Repo, database: Path.join(state_dir, "jarvis2.db"), pool_size: 3

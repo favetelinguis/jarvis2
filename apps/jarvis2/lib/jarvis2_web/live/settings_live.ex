@@ -8,7 +8,6 @@ defmodule Jarvis2Web.SettingsLive do
   def mount(_params, _session, socket) do
     {:ok,
      socket
-     |> assign(:live?, Application.get_env(:jarvis2, :live, false))
      |> assign(:kinds, Jarvis2.Herdr.Actions.agent_kinds())
      |> assign(:levels, Run.thinking_levels())
      |> assign(:token_path, Path.join(Application.get_env(:jarvis2, :state_dir, ""), "token"))
@@ -42,15 +41,8 @@ defmodule Jarvis2Web.SettingsLive do
   def render(assigns) do
     ~H"""
     <h1>Settings</h1>
-    <p><.live_badge live={@live?} /></p>
-    <p :if={!@live?} class="banner banner-warn">
-      This server runs in dry-run mode. Enabled actions below are only planned and logged until it is
-      started with <code>JARVIS2_LIVE=1</code>.
-    </p>
     <p class="muted">
-      Live mode is set by the environment and can never be switched on from here. Setting
-      <code>JARVIS2_SCENARIOS</code>
-      restricts which actions may be enabled at all.
+      <code>JARVIS2_SCENARIOS</code> restricts which actions may be enabled at all.
     </p>
 
     <.form for={@form} id="settings-form" phx-change="validate" phx-submit="save" class="stack">

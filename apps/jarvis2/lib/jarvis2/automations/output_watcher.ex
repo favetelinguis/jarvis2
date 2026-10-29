@@ -39,18 +39,14 @@ defmodule Jarvis2.Automations.OutputWatcher do
       Jarvis2.Journal.record(%{
         source: :automation,
         type: "automation.output_watcher",
-        outcome: if(match?({:ok, %{dry_run: true}}, result), do: :dry_run, else: :ok),
+        outcome: outcome(result),
         payload: %{pane: pane}
       })
 
       Phoenix.PubSub.local_broadcast(
         Jarvis2.PubSub,
         "scenario:output_watcher",
-        {:jarvis2, "scenario:output_watcher",
-         %{
-           pane: pane,
-           dry_run: match?({:ok, %{dry_run: true}}, result)
-         }}
+        {:jarvis2, "scenario:output_watcher", %{pane: pane, outcome: outcome(result)}}
       )
     end
 
@@ -58,4 +54,8 @@ defmodule Jarvis2.Automations.OutputWatcher do
   end
 
   def handle_info(_, state), do: {:noreply, state}
+
+  defp outcome({:ok, _}), do: :ok
+  defp outcome({:error, %{code: "disabled"}}), do: :refused
+  defp outcome(_), do: :error
 end

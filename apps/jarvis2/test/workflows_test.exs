@@ -133,7 +133,6 @@ defmodule Jarvis2.WorkflowsTest do
     config(:herdr_socket, socket)
     config(:execution_guard, start_supervised!({Jarvis2.Herdr.ExecutionGuard, [name: nil]}))
     config(:prompt_guard, start_supervised!({Jarvis2.Herdr.PromptGuard, [name: nil]}))
-    config(:live, false)
     config(:live_scenarios, [])
     world
   end
@@ -153,7 +152,6 @@ defmodule Jarvis2.WorkflowsTest do
     boot(agent: "idle", output: "1 failure\nJARVIS2_EXIT_2\n")
     start_supervised!({TestLoop, [name: nil]})
     Phoenix.PubSub.subscribe(Jarvis2.PubSub, "scenario:test_loop")
-    config(:live, true)
     config(:live_scenarios, [:test_loop, :run_command, :agent_prompt])
     status_change("working")
     status_change("idle")
@@ -179,7 +177,6 @@ defmodule Jarvis2.WorkflowsTest do
     status_change("idle")
     refute_receive {:request, _, _}, 200
 
-    config(:live, true)
     config(:live_scenarios, [:test_loop, :run_command, :agent_prompt])
     status_change("working")
     status_change("idle")

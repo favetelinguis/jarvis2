@@ -21,17 +21,6 @@ defmodule Jarvis2.Layouts.Dev do
              caller: caller.pane,
              server: server
            ) do
-        {:ok, %{dry_run: true}} ->
-          Logger.info("would export the new dev tab and set its root split ratio to 0.65")
-
-          {:ok,
-           %{
-             dry_run: true,
-             workspace_id: caller.workspace,
-             root: root,
-             demo: %{status: "planned", initial_ratio: 0.55, final_ratio: 0.65}
-           }}
-
         {:ok, %{"type" => "layout_apply", "layout" => %{"tab_id" => tab}} = result}
         when is_binary(tab) and tab != "" ->
           {updated, demo} = result |> demonstrate(view, caller, server) |> Map.pop(:layout)
@@ -42,6 +31,9 @@ defmodule Jarvis2.Layouts.Dev do
         {:ok, _} ->
           {:error,
            "unrecognized layout response; a tab may have been created; inspect before retrying"}
+
+        {:error, %{code: "disabled"} = error} ->
+          {:error, error}
 
         {:error, _} ->
           {:error,
@@ -96,9 +88,6 @@ defmodule Jarvis2.Layouts.Dev do
            server: server,
            timeout: 2_000
          ) do
-      {:ok, %{dry_run: true}} ->
-        %{status: "skipped", reason: "live_disabled", tab_id: tab}
-
       {:ok, %{"type" => "layout_split_ratio_set", "layout" => updated}} ->
         if ratio_updated?(created, updated) do
           %{status: "complete", tab_id: tab, root_ratio: 0.65, layout: updated}

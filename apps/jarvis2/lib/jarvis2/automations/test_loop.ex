@@ -241,9 +241,7 @@ defmodule Jarvis2.Automations.TestLoop do
   def trusted_project?(_), do: false
 
   defp enabled?,
-    do:
-      Application.get_env(:jarvis2, :live, false) and
-        :test_loop in Application.get_env(:jarvis2, :live_scenarios, [])
+    do: :test_loop in Application.get_env(:jarvis2, :live_scenarios, [])
 
   defp put_pane(state, pane, entry) do
     if Map.has_key?(state.panes, pane) or map_size(state.panes) < @max_panes,

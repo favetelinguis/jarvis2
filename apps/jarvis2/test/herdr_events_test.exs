@@ -69,6 +69,19 @@ defmodule Jarvis2.HerdrEventsTest do
     %{fixture: fixture, mirror: mirror, path: path}
   end
 
+  test "requires an explicit path rather than inheriting a Herdr socket" do
+    previous = System.get_env("HERDR_SOCKET_PATH")
+    System.put_env("HERDR_SOCKET_PATH", "/not-the-owned-session")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("HERDR_SOCKET_PATH", previous),
+        else: System.delete_env("HERDR_SOCKET_PATH")
+    end)
+
+    assert_raise KeyError, fn -> Events.init([]) end
+  end
+
   test "subscribes then builds a mirror, retrying worktree discovery", %{
     fixture: fixture,
     mirror: mirror,

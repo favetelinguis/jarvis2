@@ -6,7 +6,7 @@ defmodule Jarvis2.MCP.Server do
   require Logger
 
   @tools [
-    {"whoami", "Resolve your Herdr pane identity and app mode.", %{}},
+    {"whoami", "Resolve your Herdr pane identity.", %{}},
     {"log", "Write a message to the Jarvis2 log; fields are not logged.",
      %{
        level: {:required, {:enum, ["debug", "info", "warning", "error"]}},
@@ -21,16 +21,15 @@ defmodule Jarvis2.MCP.Server do
     {"get_layout", "Inspect the current session layout.",
      %{workspace: :string, format: {:enum, ["tree", "json"]}}},
     {"list_worktrees", "List discovered worktrees per repository.", %{repo: :string}},
-    {"notify_human", "Send a notification through Herdr (dry-run by default).",
+    {"notify_human", "Send a notification through Herdr.",
      %{title: {:required, :string}, body: :string, sound: :boolean}},
     {"read_agent", "Read recent output from a Herdr agent.",
      %{agent: {:required, :string}, lines: :integer}},
-    {"prompt_agent", "Prompt a ready agent in your workspace; guarded and dry-run by default.",
+    {"prompt_agent", "Prompt a ready agent in your workspace; guarded.",
      %{agent: {:required, :string}, text: {:required, :string}, wait: :boolean}},
-    {"spawn_agent", "Create a sibling agent in the caller's cwd; guarded and dry-run by default.",
+    {"spawn_agent", "Create a sibling agent in the caller's cwd; guarded.",
      %{name: {:required, :string}, kind: {:required, :string}, cwd: :string, prompt: :string}},
-    {"run_command",
-     "Run a shell command in a new sibling pane; guarded, not sandboxed, and dry-run by default.",
+    {"run_command", "Run a shell command in a new sibling pane; guarded and not sandboxed.",
      %{command: {:required, :string}, wait_for: :string, timeout_s: :integer}},
     {"wait_for_event",
      "Wait for a future Herdr event. Match is an object with type and optional scalar filters.",
@@ -41,7 +40,7 @@ defmodule Jarvis2.MCP.Server do
        task: {:required, {:enum, ["test", "format --check-formatted", "compile"]}},
        project: :string
      }},
-    {"apply_layout", "Create a new developer tab in your workspace (dry-run by default).",
+    {"apply_layout", "Create a new developer tab in your workspace.",
      %{name: {:required, {:enum, ["dev"]}}}},
     {"ask_human",
      "Ask the human a question; returns a ticket. Poll wait_for_answer until it is no longer pending.",
@@ -94,12 +93,7 @@ defmodule Jarvis2.MCP.Server do
         _ -> "unknown"
       end
 
-    outcome =
-      case result do
-        {:reply, %{"isError" => true}, _} -> "error"
-        {:reply, _, _} -> "ok"
-        _ -> "error"
-      end
+    outcome = outcome(result)
 
     args =
       case request do
@@ -128,6 +122,18 @@ defmodule Jarvis2.MCP.Server do
   end
 
   def handle_request(request, frame), do: Handlers.handle(request, __MODULE__, frame)
+
+  defp outcome({:reply, %{"isError" => true, "content" => [%{"text" => text} | _]}, _})
+       when text in [
+              "request rejected: disabled",
+              "prompt rejected: disabled",
+              "Herdr request failed: disabled"
+            ],
+       do: "refused"
+
+  defp outcome({:reply, %{"isError" => true}, _}), do: "error"
+  defp outcome({:reply, _, _}), do: "ok"
+  defp outcome(_), do: "error"
 
   defp dispatch_tool_request(
          %{"params" => %{"name" => "blackboard_put", "arguments" => args}} = request,
@@ -166,8 +172,14 @@ defmodule Jarvis2.MCP.Server do
     response =
       try do
         case call_tool(name, args, caller, progress) do
-          {:ok, value} -> Response.json(Response.tool(), value)
-          {:error, message} -> Response.error(Response.tool(), message)
+          {:ok, value} ->
+            Response.json(Response.tool(), value)
+
+          {:error, %{code: code}} when is_binary(code) ->
+            Response.error(Response.tool(), "request rejected: #{code}")
+
+          {:error, message} ->
+            Response.error(Response.tool(), message)
         end
       rescue
         _ -> Response.error(Response.tool(), "tool execution failed")

@@ -80,7 +80,6 @@ defmodule Jarvis2.ExecutionTest do
     config(:execution_guard, guard)
     config(:prompt_guard, prompt_guard)
     config(:herdr_socket, socket)
-    config(:live, false)
     config(:live_scenarios, [])
     start_supervised!({Finch, name: Jarvis2.ExecutionTestFinch})
     server = start_supervised!({Bandit, plug: Jarvis2Web.Endpoint, ip: {127, 0, 0, 1}, port: 0})
@@ -88,7 +87,7 @@ defmodule Jarvis2.ExecutionTest do
     %{port: port, fixture: fixture, mirror: mirror, view: view}
   end
 
-  test "discovers guarded tools and simulates them without sending mutations", ctx do
+  test "discovers guarded tools and refuses disabled scenarios without mutations", ctx do
     h = session(ctx)
 
     {200, _, %{"result" => %{"tools" => tools}}} =
@@ -96,14 +95,15 @@ defmodule Jarvis2.ExecutionTest do
 
     assert Enum.all?(~w(spawn_agent run_command), fn n -> Enum.any?(tools, &(&1["name"] == n)) end)
 
-    assert {:ok, %{"dry_run" => true}} =
+    assert {:error, _} =
              call(ctx, h, "spawn_agent", %{name: "reviewer", kind: "pi"})
 
-    assert {:ok, %{"dry_run" => true}} = call(ctx, h, "run_command", %{command: "mix test"})
+    assert {:error, _} = call(ctx, h, "run_command", %{command: "mix test"})
     refute_receive {:request, _, _}, 100
   end
 
   test "requires recognized fresh caller, safe parameters and caller cwd", ctx do
+    config(:live_scenarios, [:run_command, :agent_spawn])
     h = session(ctx)
     unknown = session(ctx, nil, nil)
     assert {:error, _} = call(ctx, unknown, "run_command", %{command: "mix test"})
@@ -116,20 +116,19 @@ defmodule Jarvis2.ExecutionTest do
     refute_receive {:request, _, _}, 100
   end
 
-  test "limits attempts per caller across tools without sending writes in dry mode", ctx do
+  test "limits real execution attempts per caller across tools", ctx do
+    config(:live_scenarios, [:run_command, :agent_spawn])
     h = session(ctx)
 
-    for _ <- 1..4,
-        do:
-          assert({:ok, %{"dry_run" => true}} = call(ctx, h, "run_command", %{command: "echo hi"}))
+    for _ <- 1..4 do
+      assert {:ok, _} = call(ctx, h, "run_command", %{command: "echo hi"})
+    end
 
     assert {:error, message} = call(ctx, h, "spawn_agent", %{name: "reviewer", kind: "pi"})
     assert message =~ "rate"
-    refute_receive {:request, _, _}, 100
   end
 
   test "live command creates a sibling, checks shell occupancy and reads bounded output", ctx do
-    config(:live, true)
     config(:live_scenarios, [:run_command])
     h = session(ctx)
 
@@ -168,7 +167,6 @@ defmodule Jarvis2.ExecutionTest do
   end
 
   test "run_command emits request-scoped MCP progress", ctx do
-    config(:live, true)
     config(:live_scenarios, [:run_command])
     h = session(ctx)
 
@@ -226,16 +224,17 @@ defmodule Jarvis2.ExecutionTest do
     assert {:ok, _} = Task.await(stream, 2_000)
   end
 
-  test "separate live gates do not enable execution", ctx do
-    config(:live, true)
+  test "a different scenario does not enable execution", ctx do
     config(:live_scenarios, [:agent_spawn])
     h = session(ctx)
-    assert {:ok, %{"dry_run" => true}} = call(ctx, h, "run_command", %{command: "echo hi"})
+    assert {:error, message} = call(ctx, h, "run_command", %{command: "echo hi"})
+    assert message =~ "disabled"
+    assert [%{outcome: :refused}] = Jarvis2.Journal.recent(type: "fleet.run_command")
+    assert [%{outcome: :refused}] = Jarvis2.Journal.recent(type: "tool.run_command")
     refute_receive {:request, _, _}, 100
   end
 
   test "never writes to a pane if its shell is not exclusively foreground", ctx do
-    config(:live, true)
     config(:live_scenarios, [:run_command])
     Agent.update(ctx.fixture, &%{&1 | process: :busy})
     h = session(ctx)
@@ -245,7 +244,6 @@ defmodule Jarvis2.ExecutionTest do
   end
 
   test "uncertain input is not retried and reports the created pane", ctx do
-    config(:live, true)
     config(:live_scenarios, [:run_command])
     Agent.update(ctx.fixture, &put_in(&1, [:fail, "pane.send_input"], :disconnect))
     h = session(ctx)
@@ -258,7 +256,6 @@ defmodule Jarvis2.ExecutionTest do
   end
 
   test "spawn starts only in a checked new sibling and prompts through the prompt guard", ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_spawn, :agent_prompt])
     h = session(ctx)
 
@@ -277,7 +274,6 @@ defmodule Jarvis2.ExecutionTest do
   end
 
   test "uncertain split is not retried", ctx do
-    config(:live, true)
     config(:live_scenarios, [:run_command])
     Agent.update(ctx.fixture, &put_in(&1, [:fail, "pane.split"], :disconnect))
     h = session(ctx)
@@ -289,7 +285,6 @@ defmodule Jarvis2.ExecutionTest do
   end
 
   test "returns the bounded tail rather than the start of long output", ctx do
-    config(:live, true)
     config(:live_scenarios, [:run_command])
     Agent.update(ctx.fixture, &%{&1 | output: String.duplicate("x", 10_000) <> "THE-END"})
     h = session(ctx)
@@ -300,7 +295,6 @@ defmodule Jarvis2.ExecutionTest do
   end
 
   test "refuses input when the created pane changes occupants during preflight", ctx do
-    config(:live, true)
     config(:live_scenarios, [:run_command])
     Agent.update(ctx.fixture, &%{&1 | process: :replaced})
     h = session(ctx)
@@ -310,7 +304,6 @@ defmodule Jarvis2.ExecutionTest do
   end
 
   test "does not claim an output match on a malformed response", ctx do
-    config(:live, true)
     config(:live_scenarios, [:run_command])
     Agent.update(ctx.fixture, &put_in(&1, [:fail, "pane.wait_for_output"], {:delay, 1}))
     h = session(ctx)
@@ -319,7 +312,6 @@ defmodule Jarvis2.ExecutionTest do
   end
 
   test "spawn does not silently send a prompt when prompt scenario is disabled", ctx do
-    config(:live, true)
     config(:live_scenarios, [:agent_spawn])
     h = session(ctx)
 

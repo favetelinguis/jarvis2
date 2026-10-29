@@ -17,9 +17,9 @@ defmodule Jarvis2.Herdr.PromptGuard do
     GenServer.start_link(__MODULE__, opts, if(name, do: [name: name], else: []))
   end
 
-  def reserve(caller, target, mode, server \\ __MODULE__) do
+  def reserve(caller, target, server \\ __MODULE__) do
     try do
-      GenServer.call(server, {:reserve, caller, target, mode}, 3_000)
+      GenServer.call(server, {:reserve, caller, target}, 3_000)
     rescue
       _ -> {:error, %{code: "guard_unavailable"}}
     catch
@@ -34,28 +34,28 @@ defmodule Jarvis2.Herdr.PromptGuard do
   def init(_opts), do: {:ok, %{edges: MapSet.new(), rates: %{}, active: %{}, cooldowns: %{}}}
 
   @impl true
-  def handle_call({:reserve, caller, target, mode}, {owner, _}, state)
-      when is_map(caller) and is_binary(target) and mode in [:dry, :live] do
+  def handle_call({:reserve, caller, target}, {owner, _}, state)
+      when is_map(caller) and is_binary(target) do
     mirror = Application.get_env(:jarvis2, :mirror, Mirror)
     now = System.monotonic_time(:millisecond)
     state = prune(state, now)
 
     with {:ok, target_pane} <- resolve(caller, target, get_view(mirror)),
-         :ok <- allow(state, mode, caller.pane, target_pane) do
-      key = {mode, target_pane}
-      caller_key = {mode, caller.pane}
+         :ok <- allow(state, caller.pane, target_pane) do
+      key = target_pane
+      caller_key = caller.pane
       lease = make_ref()
       monitor = Process.monitor(owner)
       active = Map.put(state.active, key, %{lease: lease, monitor: monitor})
       rates = Map.update(state.rates, caller_key, [now], &[now | &1])
-      edges = MapSet.put(state.edges, {mode, caller.pane, target_pane})
+      edges = MapSet.put(state.edges, {caller.pane, target_pane})
       {:reply, {:ok, target_pane, lease}, %{state | active: active, rates: rates, edges: edges}}
     else
       {:error, code} -> {:reply, {:error, %{code: code}}, state}
     end
   end
 
-  def handle_call({:reserve, _, _, _}, _from, state),
+  def handle_call({:reserve, _, _}, _from, state),
     do: {:reply, {:error, %{code: "invalid_caller_or_target"}}, state}
 
   @impl true
@@ -153,10 +153,10 @@ defmodule Jarvis2.Herdr.PromptGuard do
 
   defp valid_occupant?(_, _), do: false
 
-  defp allow(state, mode, caller, target) do
-    target_key = {mode, target}
-    caller_key = {mode, caller}
-    edge = {mode, caller, target}
+  defp allow(state, caller, target) do
+    target_key = target
+    caller_key = caller
+    edge = {caller, target}
 
     cond do
       Map.has_key?(state.active, target_key) or Map.has_key?(state.cooldowns, target_key) ->
@@ -174,7 +174,7 @@ defmodule Jarvis2.Herdr.PromptGuard do
       not MapSet.member?(state.edges, edge) and MapSet.size(state.edges) >= @max_edges ->
         {:error, "guard_capacity"}
 
-      reachable?(state.edges, mode, [target], caller, MapSet.new()) ->
+      reachable?(state.edges, [target], caller, MapSet.new()) ->
         {:error, "prompt_cycle_refused"}
 
       true ->
@@ -182,15 +182,15 @@ defmodule Jarvis2.Herdr.PromptGuard do
     end
   end
 
-  defp reachable?(_edges, _mode, [], _goal, _seen), do: false
-  defp reachable?(_edges, _mode, [goal | _], goal, _seen), do: true
+  defp reachable?(_edges, [], _goal, _seen), do: false
+  defp reachable?(_edges, [goal | _], goal, _seen), do: true
 
-  defp reachable?(edges, mode, [current | rest], goal, seen) do
+  defp reachable?(edges, [current | rest], goal, seen) do
     if MapSet.member?(seen, current) do
-      reachable?(edges, mode, rest, goal, seen)
+      reachable?(edges, rest, goal, seen)
     else
-      neighbors = for {^mode, ^current, next} <- edges, do: next
-      reachable?(edges, mode, neighbors ++ rest, goal, MapSet.put(seen, current))
+      neighbors = for {^current, next} <- edges, do: next
+      reachable?(edges, neighbors ++ rest, goal, MapSet.put(seen, current))
     end
   end
 

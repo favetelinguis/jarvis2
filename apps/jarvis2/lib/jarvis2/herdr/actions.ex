@@ -1,5 +1,5 @@
 defmodule Jarvis2.Herdr.Actions do
-  @moduledoc "Single entry point for Herdr mutations, gated by live mode and scenario."
+  @moduledoc "Single entry point for scenario-gated Herdr mutations."
   require Logger
   alias Jarvis2.Herdr.{Client, ExecutionGuard, Mirror, PromptGuard, Socket}
 
@@ -10,8 +10,7 @@ defmodule Jarvis2.Herdr.Actions do
       when is_atom(scenario) and is_binary(method) and is_map(params) do
     caller = Keyword.get(opts, :caller, "unknown")
 
-    if Application.get_env(:jarvis2, :live, false) and
-         scenario in Application.get_env(:jarvis2, :live_scenarios, []) do
+    if enabled?(scenario) do
       if method in @guarded_methods do
         Logger.warning(
           "Herdr live #{inspect(scenario)} #{inspect(method)} caller=#{inspect(caller)} refused: guarded execution requires a dedicated path"
@@ -32,34 +31,30 @@ defmodule Jarvis2.Herdr.Actions do
         result
       end
     else
-      Logger.info(
-        "would call #{inspect(method)} scenario=#{inspect(scenario)} caller=#{inspect(caller)} parameter_keys=#{inspect(Map.keys(params))}"
-      )
-
-      {:ok, %{dry_run: true}}
+      disabled()
     end
   end
 
   def prompt(caller, target, text, wait, opts \\ []) do
     guard = Application.get_env(:jarvis2, :prompt_guard, PromptGuard)
 
-    live =
-      Application.get_env(:jarvis2, :live, false) and
-        :agent_prompt in Application.get_env(:jarvis2, :live_scenarios, [])
+    cond do
+      not valid_prompt?(target, text, wait) ->
+        {:error, %{code: "invalid_prompt"}}
 
-    mode = if live, do: :live, else: :dry
+      not enabled?(:agent_prompt) and not match?(%{system: "ui", run_id: _}, caller) ->
+        disabled()
 
-    if valid_prompt?(target, text, wait) do
-      case PromptGuard.reserve(caller, target, mode, guard) do
-        {:ok, pane, lease} ->
-          params =
-            if wait,
-              do: %{target: pane, text: text, wait: %{timeout_ms: 60_000}},
-              else: %{target: pane, text: text}
+      true ->
+        case PromptGuard.reserve(caller, target, guard) do
+          {:ok, pane, lease} ->
+            params =
+              if wait,
+                do: %{target: pane, text: text, wait: %{timeout_ms: 60_000}},
+                else: %{target: pane, text: text}
 
-          result =
-            try do
-              if live do
+            result =
+              try do
                 result =
                   Socket.request(
                     "agent.prompt",
@@ -72,32 +67,23 @@ defmodule Jarvis2.Herdr.Actions do
                 )
 
                 result
-              else
-                Logger.info(
-                  "would call \"agent.prompt\" scenario=:agent_prompt caller=#{inspect(caller.pane)} parameter_keys=#{inspect(Map.keys(params))}"
-                )
-
-                {:ok, %{dry_run: true, target: pane}}
+              rescue
+                _ -> {:error, %{code: "disconnected"}}
+              catch
+                :exit, _ -> {:error, %{code: "disconnected"}}
               end
-            rescue
-              _ -> {:error, %{code: "disconnected"}}
-            catch
-              :exit, _ -> {:error, %{code: "disconnected"}}
-            end
 
-          PromptGuard.finish(
-            lease,
-            if(match?({:ok, _}, result), do: :ok, else: :uncertain),
-            guard
-          )
+            PromptGuard.finish(
+              lease,
+              if(match?({:ok, _}, result), do: :ok, else: :uncertain),
+              guard
+            )
 
-          result
+            result
 
-        error ->
-          error
-      end
-    else
-      {:error, %{code: "invalid_prompt"}}
+          error ->
+            error
+        end
     end
   end
 
@@ -155,29 +141,26 @@ defmodule Jarvis2.Herdr.Actions do
   end
 
   defp execute(scenario, caller, cwd, opts, operation) do
-    live = live?(scenario)
-    mode = if live, do: :live, else: :dry
     guard = Application.get_env(:jarvis2, :execution_guard, ExecutionGuard)
     socket = Keyword.get(opts, :server, Application.get_env(:jarvis2, :herdr_socket, Socket))
 
-    case ExecutionGuard.reserve(caller, mode, guard) do
+    if enabled?(scenario) do
+      execute_guarded(caller, cwd, guard, socket, operation)
+    else
+      disabled()
+    end
+  end
+
+  defp execute_guarded(caller, cwd, guard, socket, operation) do
+    case ExecutionGuard.reserve(caller, guard) do
       {:ok, verified, lease} ->
         try do
           result =
-            cond do
-              not is_nil(cwd) and
-                  (not is_binary(cwd) or Path.expand(cwd) != Path.expand(verified.cwd)) ->
-                {:error, "cwd must be the caller's current directory"}
-
-              live ->
-                operation.(verified, socket)
-
-              true ->
-                Logger.info(
-                  "would create a sibling pane scenario=#{inspect(scenario)} caller=#{inspect(verified.pane)}"
-                )
-
-                {:ok, %{dry_run: true}}
+            if not is_nil(cwd) and
+                 (not is_binary(cwd) or Path.expand(cwd) != Path.expand(verified.cwd)) do
+              {:error, "cwd must be the caller's current directory"}
+            else
+              operation.(verified, socket)
             end
 
           ExecutionGuard.finish(
@@ -377,7 +360,8 @@ defmodule Jarvis2.Herdr.Actions do
   defp maybe_prompt_new_agent(_caller, _pane, nil, _socket), do: "not_requested"
 
   defp maybe_prompt_new_agent(caller, pane, text, socket) do
-    if live?(:agent_prompt) and await_new_agent(pane, System.monotonic_time(:millisecond) + 5_000) do
+    if enabled?(:agent_prompt) and
+         await_new_agent(pane, System.monotonic_time(:millisecond) + 5_000) do
       case prompt(caller, pane["pane_id"], text, false, server: socket) do
         {:ok, _} ->
           "submitted"
@@ -533,10 +517,8 @@ defmodule Jarvis2.Herdr.Actions do
       not Enum.any?(String.to_charlist(text), &(&1 in 0..31 or &1 in 127..159))
   end
 
-  defp live?(scenario),
-    do:
-      Application.get_env(:jarvis2, :live, false) and
-        scenario in Application.get_env(:jarvis2, :live_scenarios, [])
+  defp enabled?(scenario), do: scenario in Application.get_env(:jarvis2, :live_scenarios, [])
+  defp disabled, do: {:error, %{code: "disabled", message: "scenario is disabled"}}
 
   defp valid_prompt?(target, text, wait) do
     is_binary(target) and byte_size(target) in 1..128 and is_binary(text) and

@@ -8,7 +8,7 @@ defmodule Jarvis2.Journal.Event do
     field(:source, Ecto.Enum, values: [:herdr, :mcp, :ui, :automation])
     field(:type, :string)
     field(:payload, :map, default: %{})
-    field(:outcome, Ecto.Enum, values: [:ok, :error, :dry_run, :refused], default: :ok)
+    field(:outcome, Ecto.Enum, values: [:ok, :error, :refused], default: :ok)
 
     timestamps(updated_at: false, type: :utc_datetime_usec)
   end

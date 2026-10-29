@@ -13,7 +13,6 @@ defmodule Jarvis2Web.RunLive.New do
     {:ok,
      socket
      |> assign(:availability, Launcher.availability(view))
-     |> assign(:live?, Launcher.mode() == :live)
      |> assign(:kinds, Jarvis2.Herdr.Actions.agent_kinds())
      |> assign(:levels, Run.thinking_levels())
      |> assign_form(Runs.change_run(%Run{}, attrs))}
@@ -56,12 +55,8 @@ defmodule Jarvis2Web.RunLive.New do
   def render(assigns) do
     ~H"""
     <h1>New run</h1>
-    <p><.live_badge live={@live?} /></p>
     <p :if={match?({:error, _}, @availability)} id="unavailable" class="banner banner-warn">
       {elem(@availability, 1)} Starting is disabled until this is resolved.
-    </p>
-    <p :if={!@live? && @availability == :ok} class="muted">
-      Dry-run: the run is recorded and the planned Herdr calls are shown, but nothing is started.
     </p>
 
     <.form for={@form} id="run-form" phx-change="validate" phx-submit="save" class="stack">

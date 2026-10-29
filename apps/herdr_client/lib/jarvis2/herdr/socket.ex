@@ -86,11 +86,7 @@ defmodule Jarvis2.Herdr.Socket do
 
   @impl true
   def init(opts) do
-    path =
-      Keyword.get(opts, :path) || System.get_env("HERDR_SOCKET_PATH") ||
-        Path.expand("~/.config/herdr/herdr.sock")
-
-    {:ok, path}
+    {:ok, Keyword.fetch!(opts, :path)}
   end
 
   @impl true

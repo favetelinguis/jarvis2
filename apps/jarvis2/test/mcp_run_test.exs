@@ -24,7 +24,7 @@ defmodule Jarvis2.MCPRunTest do
       end
     end)
 
-    # A private guard keeps these dry-run launches out of the shared per-minute rate limit.
+    # Keep execution attempts out of the shared per-minute rate limit.
     guard = start_supervised!({Jarvis2.Herdr.ExecutionGuard, [name: nil]})
     config(:execution_guard, guard)
 
@@ -123,6 +123,28 @@ defmodule Jarvis2.MCPRunTest do
   end
 
   test "submit_result keeps the pane usable until the run is stopped", ctx do
+    path =
+      Path.join(
+        Application.fetch_env!(:jarvis2, :state_dir),
+        "stop-#{System.unique_integer([:positive])}"
+      )
+
+    parent = self()
+
+    {:ok, _, listener} =
+      Jarvis2.Test.FakeHerdr.start_link(path, fn request ->
+        send(parent, {:close_request, request})
+        {:reply, %{result: %{type: "ok"}}}
+      end)
+
+    socket = start_supervised!({Jarvis2.Herdr.Socket, [path: path, name: nil]})
+    config(:herdr_socket, socket)
+
+    on_exit(fn ->
+      :gen_tcp.close(listener)
+      File.rm(path)
+    end)
+
     session = start_session(ctx, ctx.pane)
     %{"ticket" => id} = call(ctx, session, "ask_human", %{prompt: "still open"})
 
@@ -140,6 +162,9 @@ defmodule Jarvis2.MCPRunTest do
     assert %{status: :cancelled} = Questions.get(id)
     assert %{"ticket" => _} = call(ctx, session, "ask_human", %{prompt: "follow up"})
     assert {:ok, %{status: :stopped}} = Runs.stop_run(run)
+
+    assert_receive {:close_request,
+                    %{"method" => "pane.close", "params" => %{"pane_id" => "w1:p9"}}}
 
     assert {:error, "no run for this pane"} =
              call_error(ctx, session, "ask_human", %{prompt: "too late"})

@@ -8,14 +8,12 @@ defmodule Jarvis2.Automations.CustomWorker do
   @source "custom:jarvis2"
 
   def start(task) do
-    if Application.get_env(:jarvis2, :live, false) and
-         :custom_worker in Application.get_env(:jarvis2, :live_scenarios, []) do
-      case GenServer.start(__MODULE__, {self(), System.get_env("HERDR_PANE_ID"), task}) do
+    if :custom_worker in Application.get_env(:jarvis2, :live_scenarios, []) do
+      case GenServer.start(__MODULE__, {self(), task}) do
         {:ok, pid} -> pid
         _ -> nil
       end
     else
-      Logger.info("would report custom Mix worker on the server pane")
       nil
     end
   end
@@ -31,11 +29,11 @@ defmodule Jarvis2.Automations.CustomWorker do
   end
 
   @impl true
-  def init({owner, pane, task}) do
+  def init({owner, task}) do
     socket = Application.get_env(:jarvis2, :herdr_socket, Socket)
 
     with {:ok, _} <- Registry.register(Jarvis2.MixRegistry, :custom_worker, nil),
-         true <- valid_id?(pane),
+         {:ok, pane} <- find_server_pane(socket),
          {:ok, terminal} <- verify(pane, nil, socket, false),
          {:ok, _} <- report(pane, task, "working", socket) do
       ref = Process.monitor(owner)
@@ -89,6 +87,31 @@ defmodule Jarvis2.Automations.CustomWorker do
       timeout: 1_000
     )
   end
+
+  # The server may be outside Herdr or in another session; only a pane in the owned session
+  # with this BEAM as its foreground process is eligible.
+  defp find_server_pane(socket) do
+    with {:ok, %{"snapshot" => %{"panes" => panes}}} when is_list(panes) and length(panes) <= 128 <-
+           Client.snapshot(server: socket, timeout: 1_000),
+         [pane] <- Enum.filter(panes, &server_pane?(&1, socket)) do
+      {:ok, pane["pane_id"]}
+    else
+      _ -> {:error, :server_pane_unavailable}
+    end
+  end
+
+  defp server_pane?(%{"pane_id" => pane}, socket) when is_binary(pane) do
+    valid_id?(pane) and
+      case Socket.request("pane.process_info", %{pane_id: pane}, server: socket, timeout: 1_000) do
+        {:ok, %{"type" => "pane_process_info", "process_info" => info}} ->
+          foreground_vm?(info, pane)
+
+        _ ->
+          false
+      end
+  end
+
+  defp server_pane?(_, _), do: false
 
   defp verify(pane, expected, socket, require_worker) do
     with {:ok, first} <- snapshot(pane, expected, socket, require_worker),

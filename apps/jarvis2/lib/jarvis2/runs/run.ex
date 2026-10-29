@@ -3,7 +3,7 @@ defmodule Jarvis2.Runs.Run do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @statuses [:starting, :dry_run, :working, :blocked, :done, :failed, :lost, :stopped]
+  @statuses [:starting, :working, :blocked, :done, :failed, :lost, :stopped]
   @active [:starting, :working, :blocked, :done]
   @thinking ~w(off minimal low medium high xhigh max)
 

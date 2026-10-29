@@ -10,16 +10,6 @@ defmodule Jarvis2Web.Components do
     """
   end
 
-  attr :live, :boolean, required: true
-
-  def live_badge(assigns) do
-    ~H"""
-    <span class={["badge", if(@live, do: "badge-live", else: "badge-dry")]}>
-      Live: {if @live, do: "on", else: "off (dry-run)"}
-    </span>
-    """
-  end
-
   attr :question, :map, required: true
   attr :run, :map, default: nil
 

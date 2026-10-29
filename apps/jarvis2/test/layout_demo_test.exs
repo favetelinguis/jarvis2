@@ -54,22 +54,13 @@ defmodule Jarvis2.LayoutDemoTest do
 
     config(:mirror, mirror)
     config(:herdr_socket, socket)
-    config(:live, true)
     config(:live_scenarios, [:declarative_layout])
     %{behavior: behavior}
   end
 
-  test "dry run describes the demo without sending requests" do
-    Application.put_env(:jarvis2, :live, false)
-
-    assert {:ok,
-            %{
-              dry_run: true,
-              root: root,
-              demo: %{status: "planned", initial_ratio: 0.55, final_ratio: 0.65}
-            }} = create()
-
-    assert root.ratio == 0.55
+  test "disabled layout is refused without sending requests" do
+    Application.put_env(:jarvis2, :live_scenarios, [])
+    assert {:error, %{code: "disabled"}} = create()
     refute_receive {:request, _}, 100
   end
 
@@ -120,12 +111,12 @@ defmodule Jarvis2.LayoutDemoTest do
     end
   end
 
-  test "disabling live mode between creation and ratio update prevents the second write", %{
+  test "disabling the scenario between creation and ratio update prevents the second write", %{
     behavior: behavior
   } do
     Agent.update(behavior, fn _ -> :disable_live end)
 
-    assert {:ok, %{"demo" => %{status: "skipped", reason: "live_disabled", tab_id: "w1:t2"}}} =
+    assert {:ok, %{"demo" => %{status: "unconfirmed", tab_id: "w1:t2"}}} =
              create()
 
     assert_receive {:request, %{"method" => "layout.apply"}}, 1_000
@@ -226,7 +217,7 @@ defmodule Jarvis2.LayoutDemoTest do
   end
 
   defp respond(%{"method" => "layout.export"}, :disable_live) do
-    Application.put_env(:jarvis2, :live, false)
+    Application.put_env(:jarvis2, :live_scenarios, [])
     respond(%{"method" => "layout.export"}, :normal)
   end
 

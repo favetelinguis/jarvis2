@@ -3,17 +3,15 @@ defmodule Jarvis2.Settings do
   User configuration, stored as a single row: which automations and agent actions are enabled and
   the defaults for new runs.
 
-  Enabling a scenario only has an effect when the process runs in live mode (`JARVIS2_LIVE=1`), and
-  `JARVIS2_SCENARIOS` can lock the set that may ever be enabled, so the environment is always the
-  ceiling and the database can only narrow it.
+  `JARVIS2_SCENARIOS` can lock the set that may ever be enabled; the database can only narrow it.
   """
   alias Jarvis2.Repo
   alias Jarvis2.Settings.Setting
 
   @scenarios %{
     "attention" => "Notify when an agent is blocked or done",
-    "agent_prompt" => "Send prompts to agents (agent to agent, and from this UI)",
-    "agent_spawn" => "Start agents and manage their panes (MCP and this UI)",
+    "agent_prompt" => "Send agent-to-agent prompts",
+    "agent_spawn" => "Start sibling agents (MCP)",
     "run_command" => "Run shell commands in a new sibling pane (MCP)",
     "test_loop" => "Run mix test after an agent's turn and prompt it about failures",
     "declarative_layout" => "Create the developer layout tab",

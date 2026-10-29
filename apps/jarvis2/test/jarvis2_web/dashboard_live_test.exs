@@ -49,7 +49,6 @@ defmodule Jarvis2Web.DashboardLiveTest do
   test "renders the session and updates agent status without a reload", ctx do
     {:ok, view, html} = ctx.conn |> sign_in() |> live("/")
     assert html =~ "Connected to Herdr."
-    assert html =~ "Live: off"
     assert has_element?(view, "#pane-w1\\:p1")
     assert has_element?(view, "#agent-w1\\:p1 .badge-working")
 
@@ -89,7 +88,7 @@ defmodule Jarvis2Web.DashboardLiveTest do
 
   describe "apply dev layout" do
     setup ctx do
-      for key <- [:live, :live_scenarios, :anchor_pane] do
+      for key <- [:live_scenarios] do
         old = Application.fetch_env(:jarvis2, key)
 
         on_exit(fn ->
@@ -100,21 +99,32 @@ defmodule Jarvis2Web.DashboardLiveTest do
         end)
       end
 
-      Application.put_env(:jarvis2, :live, false)
       Application.put_env(:jarvis2, :live_scenarios, [])
-      Application.put_env(:jarvis2, :anchor_pane, "w1:p1")
       %{ctx: ctx}
     end
 
-    test "in dry-run mode plans the tab and records the attempt", %{ctx: ctx} do
+    test "disabled layout is refused and recorded", %{ctx: ctx} do
       publish(ctx.mirror, in_cwd(view("working", stale: false)))
       {:ok, view, _} = ctx.conn |> sign_in() |> live("/")
 
       view |> element("#apply-layout") |> render_click()
-      assert render(view) =~ "Dry-run: the dev layout tab would be created."
+      assert render(view) =~ "The layout could not be created."
 
-      assert [%{source: :ui, outcome: :dry_run, payload: %{"name" => "dev"}}] =
+      assert [%{source: :ui, outcome: :refused, payload: %{"name" => "dev"}}] =
                Jarvis2.Journal.recent(type: "fleet.apply_layout")
+    end
+
+    test "asks for a run when the owned workspace is missing", %{ctx: ctx} do
+      snapshot =
+        put_in(view("working", stale: false), [:snapshot, "workspaces"], [
+          %{"workspace_id" => "w1", "label" => "other"}
+        ])
+
+      publish(ctx.mirror, snapshot)
+      {:ok, view, _} = ctx.conn |> sign_in() |> live("/")
+      view |> element("#apply-layout") |> render_click()
+      assert render(view) =~ "Start a run first to create the jarvis2 workspace."
+      assert Jarvis2.Journal.recent(type: "fleet.apply_layout") == []
     end
 
     test "explains when there is no usable pane or Herdr state", %{ctx: ctx} do
@@ -156,7 +166,7 @@ defmodule Jarvis2Web.DashboardLiveTest do
       worktree_errors: %{},
       layout_diff: %{"status" => "changed", "changes" => [%{"kind" => "focus"}]},
       snapshot: %{
-        "workspaces" => [%{"workspace_id" => "w1", "label" => "repo"}],
+        "workspaces" => [%{"workspace_id" => "w1", "label" => "jarvis2"}],
         "tabs" => [%{"tab_id" => "w1:t1", "workspace_id" => "w1", "label" => "main"}],
         "panes" => [
           %{"pane_id" => "w1:p1", "tab_id" => "w1:t1", "workspace_id" => "w1", "cwd" => "/repo"}

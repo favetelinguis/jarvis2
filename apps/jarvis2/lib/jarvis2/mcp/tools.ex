@@ -6,8 +6,7 @@ defmodule Jarvis2.MCP.Tools do
   alias Jarvis2.MCP.EventWait
 
   def call("whoami", _args, caller) do
-    mode = if Application.get_env(:jarvis2, :live, false), do: "live", else: "dry"
-    {:ok, Map.put(caller, :mode, mode)}
+    {:ok, caller}
   end
 
   def call("log", args, caller) do

@@ -1,7 +1,7 @@
 # Live tour
 
-`scripts/live-tour.sh` runs Jarvis2 against an isolated, named Herdr session, so your default session is
-never touched.
+`scripts/live-tour.sh` runs Jarvis2 with an isolated `XDG_CONFIG_HOME`; its `jarvis2` session is separate
+from your normal sessions. `HERDR_ENV=1` is required by this script, not by Jarvis2.
 
 ## Automated check (mock model)
 
@@ -23,10 +23,9 @@ uses a temporary Pi configuration and never calls a real model.
 HERDR_ENV=1 MODEL=luna scripts/live-tour.sh
 ```
 
-This starts Jarvis2 in live mode with `agent_spawn` and `agent_prompt` enabled against an isolated Herdr
-session, prints the single-use sign-in link and waits. Open the link, choose **New run** (defaults: `pi`,
+This starts Jarvis2 against an isolated Herdr session, prints the single-use sign-in link and waits. Open the link, choose **New run** (defaults: `pi`,
 `openrouter/openai/gpt-6-luna`, thinking `low`) and give it a task such as *Ask me which file to change, then
-ask for approval before editing*. Watch the pane with `herdr session attach <name>` (printed by the script);
+ask for approval before editing*. Watch the pane using the attach command printed by the script (including its `XDG_CONFIG_HOME`);
 answer the agent's questions in **Inbox** or on the run page; press Enter in the script to clean up.
 
 It uses your real Pi configuration and OpenRouter credentials (so it costs tokens). For the agent to call

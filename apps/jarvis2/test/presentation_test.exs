@@ -24,13 +24,10 @@ defmodule Jarvis2.PresentationTest do
 
     {:ok, _, listener} = Jarvis2.Test.FakeHerdr.start_link(path, handler)
     {:ok, socket} = start_supervised({Socket, [name: nil, path: path]})
-    previous_live = Application.fetch_env(:jarvis2, :live)
     previous_scenarios = Application.fetch_env(:jarvis2, :live_scenarios)
-    Application.put_env(:jarvis2, :live, true)
     Application.put_env(:jarvis2, :live_scenarios, [:sidebar_tokens, :pane_hygiene])
 
     on_exit(fn ->
-      restore(:live, previous_live)
       restore(:live_scenarios, previous_scenarios)
       :gen_tcp.close(listener)
       File.rm(path)
