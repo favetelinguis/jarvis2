@@ -1,0 +1,93 @@
+#!/usr/bin/python3
+"""Forward Herdr plugin invocations to the local Jarvis2 process."""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+PLUGIN = "favetelinguis.jarvis2"
+OFFLINE = "jarvis2 not running; run action start-server"
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    return 1
+
+
+def context(name):
+    raw = os.environ.get(name, "")
+    if not raw:
+        return {}
+    if len(raw.encode()) > 65536:
+        raise ValueError("context is too large")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("context must be an object")
+    return value
+
+
+def start_server():
+    executable = os.environ.get("HERDR_BIN_PATH") or shutil.which("herdr")
+    if not executable:
+        return fail("jarvis2: Herdr executable not found")
+    try:
+        return subprocess.run([executable, "plugin", "pane", "open", "--plugin", PLUGIN,
+                               "--entrypoint", "server", "--placement", "split", "--no-focus"],
+                              check=False).returncode
+    except OSError:
+        return fail("jarvis2: unable to open server pane")
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def main():
+    if len(sys.argv) != 3 or sys.argv[1] not in ("action", "event") or not re.fullmatch(r"[A-Za-z0-9_.:-]+", sys.argv[2]):
+        return fail("usage: forward <action|event> <id>")
+    kind, identifier = sys.argv[1:]
+    if (kind, identifier) == ("action", "start-server"):
+        return start_server()
+    try:
+        port = int(os.environ.get("JARVIS2_PORT", "4747"))
+        if not 1 <= port <= 65535:
+            raise ValueError("invalid port")
+        body = {"context": context("HERDR_PLUGIN_CONTEXT_JSON"), "event": context("HERDR_PLUGIN_EVENT_JSON")}
+        for env, key in (("HERDR_PLUGIN_CLICKED_URL", "clicked_url"),
+                         ("HERDR_PLUGIN_LINK_HANDLER_ID", "link_handler_id"),
+                         ("HERDR_WORKSPACE_ID", "workspace_id"),
+                         ("HERDR_TAB_ID", "tab_id"), ("HERDR_PANE_ID", "pane_id")):
+            if os.environ.get(env):
+                body[key] = os.environ[env]
+    except (ValueError, json.JSONDecodeError):
+        return fail("jarvis2: invalid context, event, or port")
+
+    state_dir = Path(os.environ.get("HERDR_PLUGIN_STATE_DIR") or Path.home() / ".local/state/herdr/plugins" / PLUGIN)
+    try:
+        token = (state_dir / "token").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return fail(OFFLINE)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+        return fail("jarvis2: invalid token file")
+    request = urllib.request.Request(f"http://127.0.0.1:{port}/hook/{kind}/{identifier}",
+                                     data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    try:
+        with opener.open(request, timeout=1) as response:
+            response.read(4096)
+        return 0
+    except urllib.error.HTTPError as exc:
+        return fail(f"jarvis2 hook failed (HTTP {exc.code})")
+    except (urllib.error.URLError, OSError, TimeoutError):
+        return fail(OFFLINE)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

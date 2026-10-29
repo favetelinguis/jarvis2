@@ -1,0 +1,10 @@
+#!/bin/sh
+PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:/usr/bin:/bin"
+export PATH
+port=${JARVIS2_PORT:-4747}
+case "$port" in *[!0-9]*|'') printf '%s\n' 'jarvis2: invalid port' >&2; exit 1 ;; esac
+if ! result=$(curl --noproxy '*' -fsS --connect-timeout 1 --max-time 2 "http://127.0.0.1:$port/status" 2>/dev/null); then
+  printf '%s\n' 'jarvis2 not running; run action start-server' >&2
+  exit 1
+fi
+printf '%s\n' "$result"

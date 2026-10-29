@@ -1,0 +1,29 @@
+# Merge these entries into your Herdr config; replace <plugin-root> with this repo.
+# Merge existing [ui], [ui.sidebar.agents], and [ui.sidebar.spaces] tables; do not duplicate them.
+
+[[keys.command]]
+key = "prefix+j"
+type = "plugin_action"
+command = "favetelinguis.jarvis2.open-dashboard"
+
+[[keys.command]]
+key = "prefix+shift+j"
+type = "plugin_action"
+command = "favetelinguis.jarvis2.probe-context"
+
+[ui]
+tab_bar_right = [
+  { type = "command", command = "<plugin-root>/bin/status", interval_seconds = 5, timeout_seconds = 2 },
+]
+
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "workspace", "tab"],
+  ["agent", "$jarvis", "$agent_state"],
+]
+
+[ui.sidebar.spaces]
+rows = [
+  ["state_icon", "workspace"],
+  ["branch", "git_status", "$last_tool"],
+]

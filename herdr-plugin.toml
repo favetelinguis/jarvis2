@@ -1,0 +1,120 @@
+id = "favetelinguis.jarvis2"
+name = "Jarvis2"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Elixir control plane and MCP server for Herdr"
+platforms = ["linux"]
+
+[[actions]]
+id = "start-server"
+title = "Jarvis2: start server"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "start-server"]
+
+[[actions]]
+id = "open-dashboard"
+title = "Jarvis2: open dashboard"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "open-dashboard"]
+
+[[actions]]
+id = "probe-context"
+title = "Jarvis2: probe context"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "probe-context"]
+
+[[actions]]
+id = "layout-dev"
+title = "Jarvis2: developer layout"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "layout-dev"]
+
+[[actions]]
+id = "focus-mode"
+title = "Jarvis2: focus mode"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "focus-mode"]
+
+[[actions]]
+id = "focus-mode-off"
+title = "Jarvis2: clear focus mode"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "focus-mode-off"]
+
+[[actions]]
+id = "review-diff"
+title = "Jarvis2: review diff"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "review-diff"]
+
+[[actions]]
+id = "new-task"
+title = "Jarvis2: new task"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "new-task"]
+
+[[actions]]
+id = "send-to-agent"
+title = "Jarvis2: send to agent"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "send-to-agent"]
+
+[[actions]]
+id = "issue-link"
+title = "Jarvis2: capture GitHub issue"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "issue-link"]
+
+[[actions]]
+id = "docs-link"
+title = "Jarvis2: capture Hex documentation"
+contexts = ["pane", "workspace"]
+command = ["/usr/bin/python3", "bin/forward", "action", "docs-link"]
+
+[[events]]
+on = "worktree.created"
+command = ["/usr/bin/python3", "bin/forward", "event", "worktree.created"]
+
+[[events]]
+on = "worktree.opened"
+command = ["/usr/bin/python3", "bin/forward", "event", "worktree.opened"]
+
+[[events]]
+on = "worktree.removed"
+command = ["/usr/bin/python3", "bin/forward", "event", "worktree.removed"]
+
+[[panes]]
+id = "server"
+title = "Jarvis2 server"
+placement = "split"
+command = ["/usr/bin/env", "sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/serve\""]
+
+[[panes]]
+id = "dashboard"
+title = "Jarvis2 dashboard"
+placement = "popup"
+command = ["/usr/bin/python3", "bin/dashboard"]
+
+[[panes]]
+id = "docs"
+title = "HexDocs"
+placement = "popup"
+command = ["/usr/bin/python3", "bin/docs"]
+
+[[panes]]
+id = "picker"
+title = "Jarvis2 question"
+placement = "popup"
+command = ["/usr/bin/python3", "bin/picker"]
+
+[[link_handlers]]
+id = "github-issue"
+title = "Jarvis2: capture GitHub issue"
+pattern = '^https://github\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+$'
+action = "issue-link"
+
+[[link_handlers]]
+id = "hexdocs"
+title = "Jarvis2: capture Hex documentation"
+pattern = '^https://hexdocs\.pm/.+'
+action = "docs-link"

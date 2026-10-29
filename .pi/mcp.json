@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "jarvis2": {
+      "url": "http://127.0.0.1:4747/mcp",
+      "headers": {
+        "Authorization": "!echo Bearer $(cat ~/.local/state/herdr/plugins/favetelinguis.jarvis2/token)",
+        "X-Herdr-Pane": "${HERDR_PANE_ID}",
+        "X-Herdr-Workspace": "${HERDR_WORKSPACE_ID}"
+      },
+      "description": "Elixir-side Herdr control plane: identity, blackboard, agent discovery, layouts, events, notifications and an allow-listed Mix runner.",
+      "exposure": "codemode",
+      "toolExposure": {
+        "whoami": "direct",
+        "report_status": "direct",
+        "notify_human": "direct",
+        "elixir_eval": "hidden"
+      },
+      "timeout": 120
+    }
+  }
+}
