@@ -22,19 +22,6 @@ defmodule Jarvis2.Application do
 
     children = children ++ Jarvis2.MCP.child_specs() ++ [Jarvis2Web.Endpoint]
 
-    children =
-      if Application.get_env(:jarvis2, :serve, true) do
-        children ++
-          [
-            {Bandit,
-             plug: Jarvis2Web.Endpoint,
-             ip: {127, 0, 0, 1},
-             port: Application.get_env(:jarvis2, :port, 4747)}
-          ]
-      else
-        children
-      end
-
     Supervisor.start_link(children, strategy: :rest_for_one, name: Jarvis2.Supervisor)
   end
 end

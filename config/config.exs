@@ -7,6 +7,7 @@ config :anubis_mcp, log: false
 config :jarvis2, live_scenarios: [], ecto_repos: [Jarvis2.Repo]
 
 config :jarvis2, Jarvis2Web.Endpoint,
+  adapter: Bandit.PhoenixAdapter,
   server: false,
   pubsub_server: Jarvis2.PubSub,
   render_errors: [formats: [json: Jarvis2Web.ErrorJSON], layout: false]
