@@ -151,7 +151,7 @@ defmodule Jarvis2Web.RunLiveTest do
       assert run.name == "demo"
 
       assert_eventually(fn -> has_element?(show, ".badge-working") end)
-      assert_receive {:request, "pane.split"}
+      assert_receive {:request, "tab.create"}
       assert_receive {:request, "agent.start"}
       assert_receive {:request, "agent.prompt"}
       assert render(show) =~ "run.start"
@@ -323,8 +323,8 @@ defmodule Jarvis2Web.RunLiveTest do
 
         result =
           case method do
-            "pane.split" ->
-              %{type: "pane_info", pane: pane}
+            "tab.create" ->
+              %{type: "tab_created", root_pane: pane}
 
             "pane.process_info" ->
               %{

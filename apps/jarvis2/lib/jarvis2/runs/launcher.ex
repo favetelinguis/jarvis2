@@ -1,6 +1,6 @@
 defmodule Jarvis2.Runs.Launcher do
   @moduledoc """
-  Performs the Herdr side of a run: split a pane next to an anchor pane, start the agent in it and
+  Performs the Herdr side of a run: create a tab in the anchor workspace, start the agent in it and
   deliver the task. The UI acts as the named system caller `ui` through the execution and prompt guards.
   """
   require Logger
@@ -41,12 +41,12 @@ defmodule Jarvis2.Runs.Launcher do
   def agent_args(_run), do: []
 
   @doc "Starts the run's agent. Returns the details to store on the run."
-  def start(%Run{} = run) do
+  def start(%Run{} = run, label \\ nil) do
     guard = Application.get_env(:jarvis2, :execution_guard, ExecutionGuard)
 
     case ExecutionGuard.reserve(caller(run), guard) do
       {:ok, _verified, lease} ->
-        result = guarded(fn -> execute(run) end)
+        result = guarded(fn -> execute(run, label) end)
 
         ExecutionGuard.finish(
           lease,
@@ -130,10 +130,10 @@ defmodule Jarvis2.Runs.Launcher do
 
   def find(_run, _view), do: nil
 
-  defp execute(run) do
+  defp execute(run, label) do
     with {:ok, view} <- fresh(current_view()),
          {:ok, anchor} <- ensure_anchor(view),
-         {:ok, pane} <- split(run, anchor),
+         {:ok, pane} <- create_tab(run, anchor, label),
          :ok <- shell_ready(pane),
          {:ok, _agent} <- start_agent(run, pane) do
       {:ok,
@@ -171,28 +171,29 @@ defmodule Jarvis2.Runs.Launcher do
     end
   end
 
-  defp split(run, anchor) do
+  defp create_tab(run, anchor, label) do
     params = %{
-      target_pane_id: anchor["pane_id"],
-      direction: "right",
+      workspace_id: anchor["workspace_id"],
+      label: String.slice(label || String.replace(run.task, ~r/\s+/, " "), 0, 32),
       cwd: run.cwd,
       focus: false,
       env: env(run)
     }
 
-    result = Socket.request("pane.split", params, server: socket(), timeout: 5_000)
-    Logger.info("Herdr live run pane.split outcome=#{outcome(result)}")
+    result = Socket.request("tab.create", params, server: socket(), timeout: 5_000)
+    Logger.info("Herdr live run tab.create outcome=#{outcome(result)}")
 
     case result do
-      {:ok, %{"type" => "pane_info", "pane" => %{"pane_id" => id, "terminal_id" => t} = pane}}
-      when is_binary(id) and is_binary(t) ->
+      {:ok,
+       %{"type" => "tab_created", "root_pane" => %{"pane_id" => id, "terminal_id" => t} = pane}}
+      when is_binary(id) and id != "" and is_binary(t) and t != "" ->
         {:ok, pane}
 
       {:error, %{code: code}} when code not in ["timeout", "disconnected"] ->
-        {:error, "Herdr rejected the new pane (#{code})."}
+        {:error, "Herdr rejected the new tab (#{code})."}
 
       _ ->
-        {:error, "A pane may have been created; inspect the workspace before retrying."}
+        {:error, "A tab may have been created; inspect the workspace before retrying."}
     end
   end
 

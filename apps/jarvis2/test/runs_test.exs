@@ -86,13 +86,13 @@ defmodule Jarvis2.RunsTest do
     test "starts a real run even when agent scenarios are disabled", %{cwd: cwd} do
       {:ok, run} = Runs.create_run(%{name: "demo", task: "private task", cwd: cwd})
       assert %Run{status: :working} = Runs.launch(run)
-      assert_receive {:request, "pane.split", _}
+      assert_receive {:request, "tab.create", _}
       assert_receive {:request, "agent.start", _}
       assert_receive {:request, "agent.prompt", _}
       refute inspect(Journal.recent()) =~ "private task"
     end
 
-    test "in live mode splits from the anchor, starts Pi with the model and delivers the task",
+    test "in live mode creates a tab, starts Pi with the model and delivers the task",
          ctx do
       live!()
       {:ok, run} = Runs.create_run(%{name: "demo", task: "write the report", cwd: ctx.cwd})
@@ -104,8 +104,10 @@ defmodule Jarvis2.RunsTest do
       assert launched.agent_name == "run-" <> String.slice(run.id, 0, 8)
       assert_receive {:run, %Run{status: :working}}
 
-      assert_receive {:request, "pane.split", split}
-      assert split["target_pane_id"] == "w1:p1"
+      assert_receive {:request, "tab.create", split}
+      assert split["workspace_id"] == "w1"
+      assert split["label"] == "write the report"
+      refute_receive {:request, "pane.split", _}, 50
       assert split["cwd"] == ctx.cwd
       assert split["env"]["JARVIS2_RUN_ID"] == run.id
       assert Enum.sort(Map.keys(split["env"])) == ["JARVIS2_MCP_URL", "JARVIS2_RUN_ID"]
@@ -133,13 +135,21 @@ defmodule Jarvis2.RunsTest do
       refute inspect(events) =~ "write the report"
     end
 
-    test "a rejected split fails the run without starting an agent", ctx do
+    test "a rejected tab fails the run without starting an agent", ctx do
       live!()
-      Agent.update(ctx.behavior, &Map.put(&1, "pane.split", {:error, "invalid_request"}))
+      Agent.update(ctx.behavior, &Map.put(&1, "tab.create", {:error, "invalid_request"}))
       {:ok, run} = Runs.create_run(%{name: "demo", task: "t", cwd: ctx.cwd})
 
-      assert %Run{status: :failed, result: %{"error" => error}} = Runs.launch(run)
-      assert error =~ "rejected"
+      assert %Run{status: :failed, pane_id: nil, result: %{"error" => error}} = Runs.launch(run)
+      assert error =~ "rejected the new tab"
+      refute_receive {:request, "agent.start", _}, 100
+    end
+
+    test "an uncertain tab creation warns before retry", ctx do
+      Agent.update(ctx.behavior, &Map.put(&1, "tab.create", {:error, "timeout"}))
+      {:ok, run} = Runs.create_run(%{name: "demo", task: "t", cwd: ctx.cwd})
+      assert %Run{status: :failed, pane_id: nil, result: %{"error" => error}} = Runs.launch(run)
+      assert error =~ "tab may have been created"
       refute_receive {:request, "agent.start", _}, 100
     end
 
@@ -155,10 +165,10 @@ defmodule Jarvis2.RunsTest do
                       %{"label" => "jarvis2", "cwd" => cwd, "focus" => false}}
 
       assert cwd == ctx.cwd
-      assert_receive {:request, "pane.split", %{"target_pane_id" => "w1:p1"}}
+      assert_receive {:request, "tab.create", %{"workspace_id" => "w1"}}
     end
 
-    test "a rejected workspace creation does not split a pane", ctx do
+    test "a rejected workspace creation does not create a tab", ctx do
       live!()
       empty = update_in(view(), [:snapshot], &Map.merge(&1, %{"workspaces" => [], "panes" => []}))
       :ok = GenServer.call(ctx.mirror, {:put, empty})
@@ -167,7 +177,7 @@ defmodule Jarvis2.RunsTest do
       assert %Run{status: :failed, result: %{"error" => message}} = Runs.launch(run)
       assert message =~ "inspect the session before retrying"
       assert_receive {:request, "workspace.create", _}
-      refute_receive {:request, "pane.split", _}, 100
+      refute_receive {:request, "tab.create", _}, 100
     end
 
     test "anchor ignores focused panes in other workspaces" do
@@ -289,7 +299,8 @@ defmodule Jarvis2.RunsTest do
 
   describe "kanban integration" do
     test "a scratch card starts only one run", ctx do
-      {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan this", cwd: ctx.cwd})
+      title = String.duplicate("x", 80)
+      {:ok, card} = Jarvis2.Kanban.create_card(%{title: title, cwd: ctx.cwd})
 
       results =
         1..2
@@ -300,9 +311,12 @@ defmodule Jarvis2.RunsTest do
       assert [{:error, _}] = Enum.filter(results, &match?({:error, _}, &1))
       assert moved.column == :agent
       assert length(Runs.list_runs()) == 1
+      assert_receive {:request, "tab.create", %{"label" => label}}, 3_000
+      assert label == String.slice(title, 0, 32)
       assert_receive {:request, "agent.start", _}, 3_000
       assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
       assert text =~ "ask_questions"
+      assert text =~ "Provide alternatives whenever applicable"
       assert_eventually(fn -> Journal.count(type: "run.start", run_id: moved.run_id) > 0 end)
       assert Runs.get_run(moved.run_id).status == :working
     end
@@ -311,7 +325,7 @@ defmodule Jarvis2.RunsTest do
       run = working_run(ctx)
       {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan this", cwd: ctx.cwd})
       card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
-      assert {:ok, _} = Jarvis2.Kanban.submit_plan(run.id, "The plan")
+      assert {:ok, _} = Jarvis2.Kanban.submit_deliverable(run.id, "The plan")
       card = Jarvis2.Kanban.get_card(card.id)
       assert {:ok, reopened} = Jarvis2.Kanban.reopen(card, "Add alternatives")
       assert reopened.run_id == run.id
@@ -337,7 +351,7 @@ defmodule Jarvis2.RunsTest do
       {:ok, _} = Jarvis2.Kanban.submit_answers(round)
       assert_receive {:request, "agent.prompt", _}, 3_000
       assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) > 0 end)
-      {:ok, _} = Jarvis2.Kanban.submit_plan(run.id, "Previous finished plan")
+      {:ok, _} = Jarvis2.Kanban.submit_deliverable(run.id, "Previous finished plan")
       run |> Run.progress_changeset(%{status: :lost}) |> Repo.update!()
       {:ok, reopened} = Jarvis2.Kanban.reopen(Jarvis2.Kanban.get_card(card.id), "Add more")
       refute reopened.run_id == run.id
@@ -598,9 +612,9 @@ defmodule Jarvis2.RunsTest do
     {:reply, %{result: %{type: "workspace_created", root_pane: pane}}}
   end
 
-  defp respond(%{"method" => "pane.split"}, _mirror, _) do
+  defp respond(%{"method" => "tab.create"}, _mirror, _) do
     pane = %{pane_id: "w1:p9", terminal_id: "term-run", workspace_id: "w1", tab_id: "w1:t1"}
-    {:reply, %{result: %{type: "pane_info", pane: pane}}}
+    {:reply, %{result: %{type: "tab_created", root_pane: pane}}}
   end
 
   defp respond(%{"method" => "pane.process_info"}, _mirror, _) do

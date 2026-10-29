@@ -1,10 +1,10 @@
 defmodule Jarvis2.Kanban do
-  @moduledoc "Cards and persistent interview rounds for the planning board."
+  @moduledoc "Cards and persistent question rounds for the deliverables board."
   import Ecto.Query
 
   alias Jarvis2.{Journal, Repo, Runs}
   alias Jarvis2.Herdr.Mirror
-  alias Jarvis2.Kanban.{Card, Feedback, Prompt, Round}
+  alias Jarvis2.Kanban.{Card, Feedback, Kind, Prompt, Round}
   alias Jarvis2.Runs.{Launcher, Run}
 
   def topic, do: "kanban"
@@ -48,17 +48,22 @@ defmodule Jarvis2.Kanban do
   end
 
   def ask_questions(run_id, questions) do
-    cond do
-      not Round.valid_questions?(questions) ->
-        {:error, "Invalid questions or limits exceeded."}
-
-      card = get_card_by_run(run_id) ->
-        if Enum.any?(card.rounds, &(&1.status == :open)),
-          do: {:error, "A round is already open."},
-          else: ask(card, run_id, questions)
-
-      true ->
+    case get_card_by_run(run_id) do
+      nil ->
         {:error, "Not a kanban run."}
+
+      card ->
+        cond do
+          not Round.valid_questions?(questions, Kind.get(card.kind).max_questions) ->
+            {:error,
+             "Invalid questions or limits exceeded (maximum #{Kind.get(card.kind).max_questions})."}
+
+          Enum.any?(card.rounds, &(&1.status == :open)) ->
+            {:error, "A round is already open."}
+
+          true ->
+            ask(card, run_id, questions)
+        end
     end
   end
 
@@ -139,23 +144,29 @@ defmodule Jarvis2.Kanban do
     Repo.get!(Round, current.id)
   end
 
-  def submit_plan(run_id, plan) do
-    cond do
-      not is_binary(plan) or byte_size(plan) > 20_000 or String.trim(plan) == "" ->
-        {:error, "Invalid plan."}
-
-      card = get_card_by_run(run_id) ->
-        finish(card, run_id, plan)
-
-      true ->
+  def submit_deliverable(run_id, content) do
+    case get_card_by_run(run_id) do
+      nil ->
         {:error, "Not a kanban run."}
+
+      card ->
+        max = Kind.get(card.kind).max_deliverable
+
+        cond do
+          not is_binary(content) or String.trim(content) == "" -> {:error, "Invalid deliverable."}
+          byte_size(content) > max -> {:error, "Deliverable exceeds #{max} bytes; shorten it."}
+          true -> finish(card, run_id, content)
+        end
     end
   end
 
-  defp finish(card, run_id, plan) do
+  defp finish(card, run_id, content) do
     transaction(
       fn ->
-        transition!(card.id, [:agent, :awaiting_user], :done, run_id: run_id, plan: plan)
+        transition!(card.id, [:agent, :awaiting_user], :done,
+          run_id: run_id,
+          deliverable: content
+        )
 
         Repo.update_all(from(r in Round, where: r.card_id == ^card.id and r.status == :open),
           set: [status: :cancelled, updated_at: DateTime.utc_now()]
@@ -164,7 +175,7 @@ defmodule Jarvis2.Kanban do
         Repo.get!(Card, card.id)
       end,
       card.id,
-      "kanban.plan"
+      "kanban.deliverable"
     )
   end
 
@@ -242,7 +253,7 @@ defmodule Jarvis2.Kanban do
 
     case result do
       {:ok, {:launch, run, item}} ->
-        launch(run, item, card.id)
+        launch(run, item, card.id, card.title)
         {:ok, get_card(card.id)}
 
       {:ok, {:resume, _item}} ->
@@ -277,9 +288,9 @@ defmodule Jarvis2.Kanban do
     end
   end
 
-  defp launch(run, item, card_id) do
+  defp launch(run, item, card_id, title) do
     Task.Supervisor.start_child(Jarvis2.TaskSupervisor, fn ->
-      Runs.launch(run, &record_launch_delivery(&1, item, card_id))
+      Runs.launch(run, &record_launch_delivery(&1, item, card_id), title)
     end)
   end
 
@@ -328,7 +339,7 @@ defmodule Jarvis2.Kanban do
       text =
         case item do
           %Round{} -> Prompt.answers(item)
-          %Feedback{} -> Prompt.reopen(item.text)
+          %Feedback{} -> Prompt.reopen(item.text, card.kind)
         end
 
       valid = fn -> delivery_valid?(card.id, run.id, item) end
@@ -380,7 +391,7 @@ defmodule Jarvis2.Kanban do
     now = DateTime.utc_now()
     query = from c in Card, where: c.id == ^id and c.column in ^List.wrap(from)
     query = if attrs[:run_id], do: where(query, [c], c.run_id == ^attrs[:run_id]), else: query
-    changes = [column: to, updated_at: now] ++ Keyword.take(attrs, [:plan])
+    changes = [column: to, updated_at: now] ++ Keyword.take(attrs, [:deliverable])
     {count, _} = Repo.update_all(query, set: changes)
     if count != 1, do: Repo.rollback("The card changed or that move is not allowed.")
   end

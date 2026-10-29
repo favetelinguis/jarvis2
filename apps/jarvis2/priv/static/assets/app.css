@@ -38,8 +38,16 @@ label.check { display: flex; gap: .6rem; align-items: baseline; }
 .kanban-column.waiting { background: #d9822b22; }
 .kanban-column.drop-target { outline: 2px solid #2a7de1; }
 .kanban-card { border: 1px solid #8886; border-radius: .4rem; padding: .6rem; margin: .5rem 0; background: Canvas; cursor: grab; }
+.kanban-card[data-kind="plan"] { border-left: .35rem solid #2a7de1; }
+.kanban-card[data-kind="research"] { border-left: .35rem solid #8e5bd6; }
+.kanban-card[data-kind="explain"] { border-left: .35rem solid #1a9e8f; }
+.kanban-card[data-kind="review"] { border-left: .35rem solid #d6456b; }
+.kanban-card[data-kind="refine"] { border-left: .35rem solid #3d9a40; }
 .kanban-card > a { display: block; font-weight: bold; }
 .kanban-panel { margin-top: 1rem; padding: 1rem; border: 1px solid #8886; border-radius: .5rem; }
 .kanban-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .kanban-panel textarea { width: min(100%, 40rem); min-height: 6rem; }
-.kanban-panel .question button { margin: .2rem; }
+.kanban-panel .question-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.kanban-panel .answer-choices { display: flex; flex-wrap: wrap; gap: .4rem; }
+.kanban-panel .answer-choices button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.kanban-panel .answer-choices button[aria-pressed="true"] { outline: 2px solid #2a7de1; font-weight: bold; }

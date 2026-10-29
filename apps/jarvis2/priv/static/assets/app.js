@@ -36,6 +36,18 @@ window.addEventListener("DOMContentLoaded", () => {
         })
       }
     },
+    Copy: {
+      mounted() {
+        this.el.querySelector("button").addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(this.el.querySelector("pre").textContent)
+            this.el.querySelector("button").textContent = "Copied"
+          } catch (_) {
+            this.el.querySelector("button").textContent = "Copy failed"
+          }
+        })
+      }
+    },
     AnswerKeys: {
       mounted() {
         this.el.addEventListener("keydown", event => {

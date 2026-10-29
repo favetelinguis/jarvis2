@@ -12,14 +12,15 @@ defmodule Jarvis2.Kanban.Round do
     timestamps(type: :utc_datetime_usec)
   end
 
-  def valid_questions?(questions) when is_list(questions) and length(questions) in 1..8 do
+  def valid_questions?(questions, max)
+      when is_list(questions) and questions != [] and length(questions) <= max do
     Enum.all?(questions, fn q ->
       is_map(q) and bounded?(get(q, :title), 120) and bounded?(get(q, :body), 1_000) and
         bounded?(get(q, :recommended), 500) and valid_options?(get(q, :options) || [])
     end)
   end
 
-  def valid_questions?(_), do: false
+  def valid_questions?(_, _), do: false
 
   def normalize_questions(questions, first) do
     questions

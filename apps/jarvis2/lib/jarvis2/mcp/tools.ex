@@ -133,13 +133,13 @@ defmodule Jarvis2.MCP.Tools do
     end
   end
 
-  def call("submit_plan", args, %{run_id: run_id}) when is_binary(run_id) do
-    with {:ok, _card} <- Kanban.submit_plan(run_id, value(args, :plan)),
+  def call("submit_deliverable", args, %{run_id: run_id}) when is_binary(run_id) do
+    with {:ok, _card} <- Kanban.submit_deliverable(run_id, value(args, :content)),
          do: {:ok, %{status: "done"}}
   end
 
   def call(name, _args, _caller)
-      when name in ~w(ask_human request_approval wait_for_answer submit_result ask_questions submit_plan),
+      when name in ~w(ask_human request_approval wait_for_answer submit_result ask_questions submit_deliverable),
       do: {:error, "no run for this pane"}
 
   def call("notify_human", args, caller) do

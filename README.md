@@ -36,7 +36,7 @@ A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bi
 1. Start with `mix run --no-halt` and sign in.
 2. **New run**: the form is prefilled with agent `pi`, model `openrouter/openai/gpt-6-luna`, thinking `low`.
    Give it a task, for example _Ask me which file to change, then ask for approval before editing_.
-3. Jarvis2 splits a pane next to the anchor pane, starts Pi there with
+3. Jarvis2 creates a tab in the `jarvis2` workspace, starts Pi in its root pane with
    `--provider openrouter --model openai/gpt-6-luna --thinking low` and a Jarvis2 MCP extension, and delivers the task. The run page
    shows status and a live timeline. The agent's questions appear as cards on the run
    page and in the **Inbox**; answering unblocks it. `submit_result` finishes the run.
@@ -55,7 +55,7 @@ repository's `.pi/mcp.json` after project trust, or add its `jarvis2` entry to `
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `/`                               | Dashboard: connection, workspace → tab → pane tree, agents, worktrees, layout diff, recent events, _Apply dev layout_ |
 | `/runs`, `/runs/new`, `/runs/:id` | Runs with status filter; start form; run page with questions, prompt box, timeline, stop; Mix jobs                     |
-| `/kanban`                         | Planning board: start an interview, answer rounds, read and reopen plans |
+| `/kanban`                         | Deliverables board: plan, research, explain, review or refine; answer questions, copy and reopen results |
 | `/inbox`                          | Every pending question and approval, with a count badge in the navigation                                                             |
 | `/blackboard`                     | Notes shared between agents and you (JSON values)                                                                                     |
 | `/events`                         | The journal, filterable by source, type prefix and run                                                                                |
@@ -81,12 +81,16 @@ or is agent-only:
 | `run_mix`                                          | a run of kind `mix` on `/runs`                                          |
 | `ask_human`, `request_approval`, `wait_for_answer` | run page and `/inbox` (run pane only)                                 |
 | `submit_result`                                    | run page _Result_ (run pane only)                                     |
-| `ask_questions`, `submit_plan`                    | kanban card (kanban run pane only)                                    |
+| `ask_questions`, `submit_deliverable`             | kanban card (kanban run pane only)                                    |
 
 Resources: `jarvis2://session`, `layout` and `worktrees` (dashboard), `events/recent` and `journal`
 (`/events`), `blackboard` (`/blackboard`). `jarvis2://layout` includes the net layout diff (membership,
 focus, geometry, split ratios, agent state; limited to 64 changes, `resynced` after a subscription gap,
 `unavailable` when invalid or oversized). Browser-origin requests to `/mcp` are rejected.
+
+Kanban kinds other than plan instruct the agent not to edit or publish changes, but this is a prompt rule,
+not a sandbox. Agents started before the `submit_plan` rename must be restarted by moving their card to
+Scratch and back to Agent.
 
 `ask_human` and `request_approval` return a ticket immediately; the agent polls `wait_for_answer(ticket,
 timeout_s ≤ 100)` until it is no longer `pending`. Questions expire after an hour and are cancelled on
@@ -102,7 +106,7 @@ result submission or when the run stops, fails or is lost; a run may have five o
   signed session cookie.
 - **MCP identity is unauthenticated.** `X-Herdr-Pane` selects an active run, including one that has
   submitted a result. Any local process can claim another pane and call MCP tools or answer for its run.
-  This also permits asking kanban questions or submitting a plan for that pane's card.
+  This also permits asking kanban questions or submitting a deliverable for that pane's card.
   A fresh mirror checks the recorded terminal against the pane. Loopback binding, Host and Origin checks,
   scenario gates, execution/prompt guards and rate limits remain in place.
 - **Guarded UI and MCP.** UI run actions act as the system caller `ui` through the execution and prompt

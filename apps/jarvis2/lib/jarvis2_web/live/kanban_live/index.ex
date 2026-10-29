@@ -3,7 +3,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
   use Phoenix.LiveView, layout: {Jarvis2Web.Layouts, :app}, log: false
   import Jarvis2Web.Components
   alias Jarvis2.{Kanban, Runs}
-  alias Jarvis2.Kanban.Card
+  alias Jarvis2.Kanban.{Card, Kind}
 
   @columns [
     {:scratch, "Scratch"},
@@ -125,6 +125,11 @@ defmodule Jarvis2Web.KanbanLive.Index do
 
   defp assign_form(socket, changeset), do: assign(socket, form: to_form(changeset, as: :card))
 
+  defp kind_hint(form) do
+    kind = Ecto.Changeset.get_field(form.source, :kind) || :plan
+    Kind.get(kind).hint
+  end
+
   defp open_round(card), do: Enum.find(card.rounds, &(&1.status == :open))
 
   defp pending?(card),
@@ -157,9 +162,23 @@ defmodule Jarvis2Web.KanbanLive.Index do
           class="stack"
         >
           <.field field={@form[:title]} label="Add card" required />
+          <label>
+            Type
+            <select id={@form[:kind].id} name={@form[:kind].name}>
+              <option
+                :for={kind <- Kind.all()}
+                value={kind}
+                selected={to_string(@form[:kind].value) == to_string(kind)}
+              >
+                {Kind.get(kind).label}
+              </option>
+            </select>
+            <.errors field={@form[:kind]} />
+          </label>
           <details>
             <summary>Idea and working directory</summary>
-            <.field field={@form[:body]} type="textarea" label="Idea" />
+            <.field field={@form[:body]} type="textarea" label="Idea" placeholder={kind_hint(@form)} />
+            <small>{kind_hint(@form)}</small>
             <.field field={@form[:cwd]} label="Working directory" required />
           </details>
           <button type="submit">Add card</button>
@@ -170,9 +189,11 @@ defmodule Jarvis2Web.KanbanLive.Index do
           class="kanban-card"
           draggable="true"
           data-card-id={card.id}
+          data-kind={card.kind}
           data-stop={column in [:agent, :awaiting_user]}
         >
           <.link patch={detail_path(card)}>{card.title}</.link>
+          <span class="badge kind-badge">{Kind.get(card.kind).label}</span>
           <.status_badge :if={card.run} status={status(card.run)} />
           <span :if={column == :awaiting_user && open_round(card)} class="badge">{length(
             open_round(card).questions
@@ -196,7 +217,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
             round={open_round(@card)}
           />
         <% :reopen -> %>
-          <h3>Current plan</h3><pre>{@card.plan}</pre>
+          <h3>Current {Kind.noun(@card.kind)}</h3><pre>{@card.deliverable}</pre>
           <.form for={%{}} id="reopen-form" phx-change="feedback" phx-submit="reopen">
             <label>What should change? <textarea name="feedback" required>{@feedback}</textarea></label>
             <span>{byte_size(@feedback)} / 1000 bytes</span>
@@ -218,8 +239,11 @@ defmodule Jarvis2Web.KanbanLive.Index do
           <section :for={feedback <- @card.feedback}>
             <h3>Reopen feedback</h3><p>{feedback.text}</p>
           </section>
-          <section :if={@card.plan}>
-            <h3>Plan</h3><pre>{@card.plan}</pre>
+          <section :if={@card.deliverable}>
+            <h3>{String.capitalize(Kind.noun(@card.kind))}</h3>
+            <div id={"deliverable-#{@card.id}"} phx-hook="Copy">
+              <button type="button">Copy</button><pre>{@card.deliverable}</pre>
+            </div>
           </section>
       <% end %>
     </aside>

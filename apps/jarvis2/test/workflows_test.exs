@@ -63,6 +63,13 @@ defmodule Jarvis2.WorkflowsTest do
     def handle_call({:req, "session.snapshot", _}, _, s),
       do: {:reply, {:reply, %{result: %{type: "session_snapshot", snapshot: s.snapshot}}}, s}
 
+    def handle_call({:req, "tab.create", params}, from, s) do
+      {:reply, {:reply, %{result: %{pane: pane}}}, s} =
+        handle_call({:req, "pane.split", params}, from, s)
+
+      {:reply, {:reply, %{result: %{type: "tab_created", root_pane: pane}}}, s}
+    end
+
     def handle_call({:req, "pane.split", params}, _, s) do
       n = s.counter + 1
 

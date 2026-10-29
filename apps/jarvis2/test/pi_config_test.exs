@@ -28,7 +28,7 @@ defmodule Jarvis2.PiConfigTest do
     assert config["exposure"] == "codemode"
 
     for name <-
-          ~w(ask_human request_approval wait_for_answer submit_result ask_questions submit_plan) do
+          ~w(ask_human request_approval wait_for_answer submit_result ask_questions submit_deliverable) do
       assert config["toolExposure"][name] == "direct"
     end
   end

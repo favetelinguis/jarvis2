@@ -11,7 +11,8 @@ defmodule Jarvis2Web.KanbanLive.AnswerForm do
     choose(socket, id, "recommended", fn q -> q["recommended"] end)
   end
 
-  def handle_event("option", %{"id" => id, "value" => value}, socket) do
+  # Not "value": the LiveView client overwrites phx-value-value with the button's own (empty) value.
+  def handle_event("option", %{"id" => id, "option" => value}, socket) do
     choose(socket, id, "option", fn _ -> value end)
   end
 
@@ -103,24 +104,30 @@ defmodule Jarvis2Web.KanbanLive.AnswerForm do
             <h3>
               {q["id"]} — {q["title"]} <span :if={answered?(q, answer)} class="badge">Answered</span>
             </h3>
-            <p>{q["body"]}</p><p>Recommended: {q["recommended"]}</p>
-            <button
-              type="button"
-              id={"accept-#{q["id"]}"}
-              phx-click="accept"
-              phx-value-id={q["id"]}
-              phx-target={@myself}
-            >Accept recommendation</button>
-            <button
-              :for={option <- q["options"]}
-              type="button"
-              phx-click="option"
-              phx-value-id={q["id"]}
-              phx-value-value={option}
-              phx-target={@myself}
-            >{option}</button>
+            <p class="question-body">{q["body"]}</p><p>Recommended: {q["recommended"]}</p>
+            <div class="answer-choices" role="group" aria-label={"Choices for #{q["id"]}"}>
+              <button
+                type="button"
+                id={"accept-#{q["id"]}"}
+                phx-click="accept"
+                phx-value-id={q["id"]}
+                phx-target={@myself}
+                aria-pressed={to_string(answer["kind"] == "recommended")}
+              >Accept recommendation</button>
+              <button
+                :for={option <- q["options"]}
+                type="button"
+                phx-click="option"
+                phx-value-id={q["id"]}
+                phx-value-option={option}
+                phx-target={@myself}
+                aria-pressed={to_string(answer["kind"] == "option" && answer["text"] == option)}
+              >{option}</button>
+            </div>
+            <p :if={q["options"] == []} class="muted">No alternatives provided.</p>
             <input type="hidden" name={"answers[#{q["id"]}][kind]"} value={answer["kind"] || ""} />
-            <label>Answer <input name={"answers[#{q["id"]}][text]"} value={answer["text"] || ""} /></label>
+            <label>Or write your own answer
+            <input name={"answers[#{q["id"]}][text]"} value={answer["text"] || ""} /></label>
             <label>Because… <input name={"answers[#{q["id"]}][note]"} value={answer["note"] || ""} /></label>
           </section>
           <button id="submit-answers" type="submit" disabled={!Round.complete?(@round)}>Submit answers</button>
