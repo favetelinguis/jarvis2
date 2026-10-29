@@ -68,7 +68,7 @@ defmodule Jarvis2Web.SettingsLive do
       </fieldset>
 
       <fieldset>
-        <legend>New run defaults</legend>
+        <legend>Agent defaults</legend>
         <.field field={@form[:default_kind]} label="Agent" type="select" options={@kinds} />
         <.field field={@form[:default_model]} label="Model" />
         <.field field={@form[:default_thinking]} label="Thinking" type="select" options={@levels} />

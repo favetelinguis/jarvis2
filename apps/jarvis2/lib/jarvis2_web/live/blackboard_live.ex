@@ -95,7 +95,7 @@ defmodule Jarvis2Web.BlackboardLive do
           <td>{Calendar.strftime(entry.updated_at, "%Y-%m-%d %H:%M:%S")}</td>
           <td>
             <% run = @runs[entry.updated_by_run_id] %>
-            <.link :if={run} navigate={"/runs/#{run.id}"}>{run.name}</.link>
+            <span :if={run}>{run.name}</span>
             <span :if={!run} class="muted">{if entry.updated_by_run_id, do: "gone", else: "—"}</span>
           </td>
           <td class="actions">

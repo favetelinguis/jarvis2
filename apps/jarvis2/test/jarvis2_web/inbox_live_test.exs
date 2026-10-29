@@ -93,30 +93,10 @@ defmodule Jarvis2Web.InboxLiveTest do
   end
 
   test "the nav badge follows new questions on any page", ctx do
-    {:ok, view, _} = live(ctx.conn, "/runs")
+    {:ok, view, _} = live(ctx.conn, "/kanban")
     refute has_element?(view, "#inbox-count")
 
     {:ok, _} = Questions.ask(ctx.one.id, %{kind: :question, prompt: "ping"})
     assert has_element?(view, "#inbox-count", "1")
-  end
-
-  test "the run page shows its own pending questions and updates live", ctx do
-    {:ok, other} = Questions.ask(ctx.two.id, %{kind: :question, prompt: "not for alpha"})
-    {:ok, view, html} = live(ctx.conn, "/runs/#{ctx.one.id}")
-    refute html =~ "Waiting for you"
-
-    {:ok, q} =
-      Questions.ask(ctx.one.id, %{
-        kind: :approval,
-        prompt: "deploy?",
-        options: ["approve", "deny"]
-      })
-
-    assert has_element?(view, "#question-#{q.id}", "deploy?")
-    refute has_element?(view, "#question-#{other.id}")
-
-    view |> element("#question-#{q.id} button", "approve") |> render_click()
-    refute has_element?(view, "#question-#{q.id}")
-    assert %{answer: "approve"} = Questions.get(q.id)
   end
 end

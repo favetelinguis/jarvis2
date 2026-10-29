@@ -27,6 +27,13 @@ defmodule Jarvis2.KanbanTest do
     }
   end
 
+  test "scratch cards can be archived without a run" do
+    assert {:ok, archived} = Kanban.move(card(), :archive)
+    assert archived.column == :archive
+    assert archived.run_id == nil
+    assert {:error, "Restore an archived card with a reason."} = Kanban.move(archived, :scratch)
+  end
+
   test "creates and validates cards" do
     card = card()
     assert %Card{column: :scratch} = Kanban.get_card(card.id)
@@ -235,6 +242,11 @@ defmodule Jarvis2.KanbanTest do
       assert prompt =~ heading
       assert prompt =~ "Keep your own chat output minimal"
       assert String.valid?(prompt)
+      restored = Jarvis2.Kanban.Prompt.build(card, [round], feedback, restored: true)
+      assert byte_size(restored) <= 6_000
+      assert restored =~ "Restored from archive"
+      assert restored =~ feedback
+      assert String.valid?(restored)
       reopened = Jarvis2.Kanban.Prompt.reopen(feedback, kind)
       assert reopened =~ Jarvis2.Kanban.Kind.noun(kind)
       assert String.ends_with?(reopened, "Chat output stays minimal.")

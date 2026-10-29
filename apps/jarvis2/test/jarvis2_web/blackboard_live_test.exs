@@ -55,7 +55,8 @@ defmodule Jarvis2Web.BlackboardLiveTest do
 
     :ok = Blackboard.put("note", "hello", run.id)
     assert has_element?(view, "code", "note")
-    assert has_element?(view, "a", "writer")
+    assert has_element?(view, "span", "writer")
+    refute has_element?(view, "a", "writer")
   end
 
   test "values are escaped", %{conn: conn} do

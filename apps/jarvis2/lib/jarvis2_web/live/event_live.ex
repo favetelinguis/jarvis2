@@ -114,11 +114,7 @@ defmodule Jarvis2Web.EventLive do
           <td>{event.type}</td>
           <td>{event.outcome}</td>
           <td>
-            <.link :if={event.run_id} navigate={"/runs/#{event.run_id}"}>{String.slice(
-              event.run_id,
-              0,
-              8
-            )}</.link>
+            <span :if={event.run_id}>{String.slice(event.run_id, 0, 8)}</span>
           </td>
           <td><code class="payload">{Jason.encode!(event.payload)}</code></td>
         </tr>

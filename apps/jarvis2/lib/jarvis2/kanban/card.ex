@@ -9,7 +9,11 @@ defmodule Jarvis2.Kanban.Card do
     field :title, :string
     field :body, :string
     field :cwd, :string
-    field :column, Ecto.Enum, values: [:scratch, :agent, :awaiting_user, :done], default: :scratch
+
+    field :column, Ecto.Enum,
+      values: [:scratch, :agent, :awaiting_user, :done, :archive],
+      default: :scratch
+
     field :kind, Ecto.Enum, values: Kind.all(), default: :plan
     field :deliverable, :string
     belongs_to :run, Jarvis2.Runs.Run, type: :binary_id

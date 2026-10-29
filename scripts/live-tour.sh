@@ -51,8 +51,7 @@ if [ "$luna" = 1 ]; then
   for _ in $(seq 1 200); do curl -s -o /dev/null "http://127.0.0.1:$jp/healthz" && break; sleep .2; done
   echo "Isolated Herdr session: $n   (watch it with: XDG_CONFIG_HOME=$XDG_CONFIG_HOME herdr session attach $n)"
   grep -a 'Jarvis2 UI' "$d/app.log" || { echo "Jarvis2 did not start; see $d/app.log" >&2; fail=1; exit 1; }
-  echo "Open the link above, choose New run (defaults: pi, openrouter/openai/gpt-6-luna, thinking low)."
-  echo 'Suggested task: Ask me which file to change, then ask for approval before editing.'
+  echo "Open the link above, add a Kanban card and drag it to Agent (defaults: pi, openrouter/openai/gpt-6-luna, thinking low)."
   echo "Press Enter here to stop and clean up."
   read -r _
   exit 0

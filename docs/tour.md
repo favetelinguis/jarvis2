@@ -23,10 +23,7 @@ uses a temporary Pi configuration and never calls a real model.
 HERDR_ENV=1 MODEL=luna scripts/live-tour.sh
 ```
 
-This starts Jarvis2 against an isolated Herdr session, prints the single-use sign-in link and waits. Open the link, choose **New run** (defaults: `pi`,
-`openrouter/openai/gpt-6-luna`, thinking `low`) and give it a task such as *Ask me which file to change, then
-ask for approval before editing*. Watch the pane using the attach command printed by the script (including its `XDG_CONFIG_HOME`);
-answer the agent's questions in **Inbox** or on the run page; press Enter in the script to clean up.
+This starts Jarvis2 against an isolated Herdr session, prints the single-use sign-in link and waits. Open the link, add a card on **Kanban** and drag it to **Agent** (defaults: `pi`, `openrouter/openai/gpt-6-luna`, thinking `low`). Watch the pane using the attach command printed by the script (including its `XDG_CONFIG_HOME`); answer card questions on the board and other questions in **Inbox**; press Enter in the script to clean up.
 
 It uses your real Pi configuration and OpenRouter credentials (so it costs tokens). For the agent to call
 Jarvis2's tools, add the `jarvis2` server from `.pi/mcp.json` to `~/.pi/agent/mcp.json`; the script warns if

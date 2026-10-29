@@ -188,6 +188,30 @@ defmodule Jarvis2Web.KanbanLiveTest do
     assert render(view) =~ "plan text"
   end
 
+  test "archive column and restore form enforce a reason", %{conn: conn} do
+    {:ok, card} = Kanban.create_card(%{title: "Finished", cwd: File.cwd!()})
+    card |> Ecto.Changeset.change(column: :done, deliverable: "result") |> Repo.update!()
+    {:ok, view, _} = live(conn, "/kanban")
+
+    for column <- ~w(scratch agent awaiting_user done archive),
+        do: assert(has_element?(view, "[data-column=#{column}]"))
+
+    render_hook(view, "move_card", %{id: card.id, to: "archive"})
+    assert_reply view, %{ok: true}
+    assert Kanban.get_card(card.id).column == :archive
+    assert has_element?(view, "#card-#{card.id}", "no saved session")
+    render_hook(view, "move_card", %{id: card.id, to: "scratch"})
+    assert_reply view, %{ok: false}
+    assert render(view) =~ "Restore an archived card with a reason"
+    render_hook(view, "move_card", %{id: card.id, to: "agent"})
+    assert_reply view, %{ok: true}
+    assert_patch(view, "/kanban/cards/#{card.id}/reopen")
+    assert has_element?(view, "#reopen-form button", "Restore")
+    render_submit(view, "reopen", %{"feedback" => " "})
+    assert render(view) =~ "Feedback is required"
+    assert Kanban.get_card(card.id).column == :archive
+  end
+
   defp assert_eventually(fun, attempts \\ 100) do
     cond do
       fun.() ->

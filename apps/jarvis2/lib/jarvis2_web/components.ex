@@ -22,7 +22,7 @@ defmodule Jarvis2Web.Components do
         <span class="muted">
           {@question.kind}
           <span :if={@run}>
-            · <.link navigate={"/runs/#{@run.id}"}>{@run.name}</.link>
+            · {@run.name}
           </span>
         </span>
       </p>

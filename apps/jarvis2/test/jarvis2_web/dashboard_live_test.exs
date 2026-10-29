@@ -23,6 +23,12 @@ defmodule Jarvis2Web.DashboardLiveTest do
     %{conn: conn, mirror: mirror}
   end
 
+  test "removed run pages are not routable", %{conn: conn} do
+    for path <- ["/runs", "/runs/new", "/runs/#{Ecto.UUID.generate()}"] do
+      assert get(sign_in(conn), path).status == 404
+    end
+  end
+
   test "redirects visitors without a session to the login page", %{conn: conn} do
     assert redirected_to(get(conn, "/")) == "/login"
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, "/")

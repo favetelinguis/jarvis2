@@ -9,7 +9,8 @@ defmodule Jarvis2Web.KanbanLive.Index do
     {:scratch, "Scratch"},
     {:agent, "Agent"},
     {:awaiting_user, "Awaiting user"},
-    {:done, "Done"}
+    {:done, "Done"},
+    {:archive, "Archive"}
   ]
 
   @impl true
@@ -65,7 +66,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
 
   def handle_event("move_card", %{"id" => id, "to" => to}, socket) do
     case Kanban.get_card(id) do
-      %Card{column: :done} when to == "agent" ->
+      %Card{column: column} when column in [:done, :archive] and to == "agent" ->
         {:reply, %{ok: true}, push_patch(socket, to: "/kanban/cards/#{id}/reopen")}
 
       %Card{} = card ->
@@ -195,6 +196,10 @@ defmodule Jarvis2Web.KanbanLive.Index do
           <.link patch={detail_path(card)}>{card.title}</.link>
           <span class="badge kind-badge">{Kind.get(card.kind).label}</span>
           <.status_badge :if={card.run} status={status(card.run)} />
+          <span :if={column == :archive} class="badge">{if card.run && card.run.kind == "pi" &&
+                                                             card.run.session_id,
+                                                           do: "session saved",
+                                                           else: "no saved session"}</span>
           <span :if={column == :awaiting_user && open_round(card)} class="badge">{length(
             open_round(card).questions
           )} questions</span>
@@ -217,15 +222,16 @@ defmodule Jarvis2Web.KanbanLive.Index do
             round={open_round(@card)}
           />
         <% :reopen -> %>
+          <h3 :if={@card.column == :archive}>Restore from archive</h3>
           <h3>Current {Kind.noun(@card.kind)}</h3><pre>{@card.deliverable}</pre>
           <.form for={%{}} id="reopen-form" phx-change="feedback" phx-submit="reopen">
             <label>What should change? <textarea name="feedback" required>{@feedback}</textarea></label>
             <span>{byte_size(@feedback)} / 1000 bytes</span>
-            <button type="submit">Reopen</button> <.link patch="/kanban">Cancel</.link>
+            <button type="submit">{if @card.column == :archive, do: "Restore", else: "Reopen"}</button>
+            <.link patch="/kanban">Cancel</.link>
           </.form>
         <% _ -> %>
           <p>{@card.body}</p><p>Working directory: <code>{@card.cwd}</code></p>
-          <p :if={@card.run}><.link navigate={"/runs/#{@card.run_id}"}>View run</.link></p>
           <section :for={round <- Enum.sort_by(@card.rounds, & &1.number)}>
             <h3>Round {round.number} ({round.status})</h3>
             <div :for={q <- round.questions}>

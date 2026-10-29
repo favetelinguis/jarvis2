@@ -29,7 +29,7 @@ window.addEventListener("DOMContentLoaded", () => {
           const id = event.dataTransfer.getData("text/plain")
           const card = [...this.el.querySelectorAll("[data-card-id]")].find(el => el.dataset.cardId === id)
           if (!card) return
-          if (column.dataset.column === "scratch" && card.dataset.stop === "true" &&
+          if (["scratch", "archive"].includes(column.dataset.column) && card.dataset.stop === "true" &&
               !window.confirm("Stop the agent and cancel any open questions?")) return
           // The server owns the DOM position, so refused drops never move the card.
           this.pushEvent("move_card", {id, to: column.dataset.column}, () => {})

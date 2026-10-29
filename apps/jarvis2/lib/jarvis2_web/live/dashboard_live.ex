@@ -57,7 +57,6 @@ defmodule Jarvis2Web.DashboardLive do
     ~H"""
     <h1>Dashboard</h1>
     <p class="actions">
-      <.link navigate="/runs/new">New run</.link>
       <button type="button" phx-click="apply_layout" id="apply-layout">Apply dev layout</button>
     </p>
     <div class={["banner", connection(@view) != :online && "banner-warn"]} id="connection">

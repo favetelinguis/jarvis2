@@ -23,7 +23,7 @@ defmodule Jarvis2.Runs.Launcher do
   def agent_name(%Run{id: id}), do: "run-" <> String.slice(id, 0, 8)
 
   @doc "Pi-specific arguments; other agent kinds start with their own defaults."
-  def agent_args(%Run{kind: "pi", model: model, thinking: thinking}) do
+  def agent_args(%Run{kind: "pi", model: model, thinking: thinking, session_id: session_id}) do
     [provider, model_id] = String.split(model, "/", parts: 2)
 
     [
@@ -35,7 +35,7 @@ defmodule Jarvis2.Runs.Launcher do
       thinking,
       "--extension",
       @pi_extension
-    ]
+    ] ++ if(session_id, do: ["--session-id", session_id], else: [])
   end
 
   def agent_args(_run), do: []
@@ -61,7 +61,20 @@ defmodule Jarvis2.Runs.Launcher do
     end
   end
 
-  @doc "Closes the run's pane, but only if it is still the terminal that was created for it."
+  @doc "Closes the owned tab, or the original pane for legacy runs."
+  def close(%Run{tab_id: tab_id}) when is_binary(tab_id) and tab_id != "" do
+    case fresh(current_view()) do
+      {:ok, %{snapshot: %{"tabs" => tabs}}} when is_list(tabs) ->
+        if Enum.any?(tabs, &(&1["tab_id"] == tab_id)), do: close_tab(tab_id), else: {:ok, :gone}
+
+      {:error, message} ->
+        {:error, message}
+
+      _ ->
+        {:error, "Herdr could not verify the tab"}
+    end
+  end
+
   def close(%Run{pane_id: nil}), do: {:ok, :gone}
 
   def close(%Run{} = run) do
@@ -73,25 +86,19 @@ defmodule Jarvis2.Runs.Launcher do
     end
   end
 
+  defp close_tab(tab_id) do
+    case Socket.request("tab.close", %{tab_id: tab_id}, server: socket()) do
+      {:ok, _} -> {:ok, :closed}
+      {:error, _} -> {:error, "Herdr could not close the tab"}
+    end
+  end
+
   defp close_pane(pane_id) do
     case Socket.request("pane.close", %{pane_id: pane_id}, server: socket()) do
       {:ok, _} -> {:ok, :closed}
       {:error, _} -> {:error, "Herdr could not close the pane"}
     end
   end
-
-  @doc "Brings the run's agent to the front in Herdr."
-  def focus(%Run{pane_id: pane_id} = run) when is_binary(pane_id) do
-    with {:ok, view} <- fresh(current_view()),
-         {_pane, _agent} <- find(run, view) || {:error, "The run's pane is gone."} do
-      case Socket.request("agent.focus", %{target: pane_id}, server: socket()) do
-        {:ok, _} -> {:ok, :focused}
-        {:error, _} -> {:error, "Herdr could not focus the pane."}
-      end
-    end
-  end
-
-  def focus(_run), do: {:error, "The run has no pane."}
 
   @doc "Sends a prompt to the run's agent through the prompt guard."
   def prompt(run, text, opts \\ [])
@@ -133,11 +140,12 @@ defmodule Jarvis2.Runs.Launcher do
   defp execute(run, label) do
     with {:ok, view} <- fresh(current_view()),
          {:ok, anchor} <- ensure_anchor(view),
-         {:ok, pane} <- create_tab(run, anchor, label),
+         {:ok, pane, tab_id} <- create_tab(run, anchor, label),
          :ok <- shell_ready(pane),
          {:ok, _agent} <- start_agent(run, pane) do
       {:ok,
        %{
+         tab_id: tab_id,
          pane_id: pane["pane_id"],
          terminal_id: pane["terminal_id"],
          agent_name: agent_name(run),
@@ -185,9 +193,10 @@ defmodule Jarvis2.Runs.Launcher do
 
     case result do
       {:ok,
-       %{"type" => "tab_created", "root_pane" => %{"pane_id" => id, "terminal_id" => t} = pane}}
+       %{"type" => "tab_created", "root_pane" => %{"pane_id" => id, "terminal_id" => t} = pane} =
+           reply}
       when is_binary(id) and id != "" and is_binary(t) and t != "" ->
-        {:ok, pane}
+        {:ok, pane, tab_id(reply)}
 
       {:error, %{code: code}} when code not in ["timeout", "disconnected"] ->
         {:error, "Herdr rejected the new tab (#{code})."}
@@ -196,6 +205,9 @@ defmodule Jarvis2.Runs.Launcher do
         {:error, "A tab may have been created; inspect the workspace before retrying."}
     end
   end
+
+  defp tab_id(%{"tab" => %{"tab_id" => id}}) when is_binary(id) and id != "", do: id
+  defp tab_id(_), do: nil
 
   defp shell_ready(pane) do
     deadline = System.monotonic_time(:millisecond) + 5_000

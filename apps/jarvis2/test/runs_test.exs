@@ -82,6 +82,57 @@ defmodule Jarvis2.RunsTest do
     end
   end
 
+  test "session ids are validated and passed only to Pi", %{cwd: cwd} do
+    attrs = %{name: "demo", task: "x", cwd: cwd}
+
+    for id <- ["bad id", "bad;id", "$(id)"] do
+      assert {:error, _} = Runs.create_run(Map.put(attrs, :session_id, id))
+    end
+
+    {:ok, run} = Runs.create_run(Map.put(attrs, :session_id, "a-123"))
+    assert Enum.take(Launcher.agent_args(run), -2) == ["--session-id", "a-123"]
+    refute "--session-id" in Launcher.agent_args(%{run | session_id: nil})
+    assert Launcher.agent_args(%{run | kind: "codex"}) == []
+  end
+
+  test "launch records the tab and stop closes the whole tab", %{
+    cwd: cwd,
+    mirror: mirror,
+    behavior: behavior
+  } do
+    {:ok, run} = Runs.create_run(%{name: "demo", task: "x", cwd: cwd})
+    run = Runs.launch(run)
+    assert run.tab_id == "w1:t2"
+    assert Runs.get_run(run.id).tab_id == "w1:t2"
+    Agent.update(behavior, &Map.put(&1, "tab.close", {:error, "failed"}))
+    assert {:error, _} = Runs.stop_run(run)
+    assert Runs.get_run(run.id).status == :working
+    assert_receive {:request, "tab.close", %{"tab_id" => "w1:t2"}}
+    Agent.update(behavior, &Map.delete(&1, "tab.close"))
+    assert {:ok, _} = Runs.stop_run(run)
+    assert_receive {:request, "tab.close", %{"tab_id" => "w1:t2"}}
+    refute_receive {:request, "pane.close", _}, 50
+    :ok = GenServer.call(mirror, {:put, view()})
+    assert {:ok, :gone} = Launcher.close(run)
+    refute_receive {:request, "tab.close", _}, 50
+  end
+
+  test "a tab reply without a tab id still launches with legacy pane cleanup", ctx do
+    pane = %{pane_id: "w1:p9", terminal_id: "term-run", workspace_id: "w1"}
+
+    Agent.update(
+      ctx.behavior,
+      &Map.put(&1, "tab.create", {:reply, %{type: "tab_created", root_pane: pane}})
+    )
+
+    {:ok, run} = Runs.create_run(%{name: "demo", task: "x", cwd: ctx.cwd})
+    run = Runs.launch(run)
+    assert run.status == :working
+    assert run.tab_id == nil
+    assert {:ok, _} = Runs.stop_run(run)
+    assert_receive {:request, "pane.close", %{"pane_id" => "w1:p9"}}
+  end
+
   describe "launch/1" do
     test "starts a real run even when agent scenarios are disabled", %{cwd: cwd} do
       {:ok, run} = Runs.create_run(%{name: "demo", task: "private task", cwd: cwd})
@@ -310,7 +361,7 @@ defmodule Jarvis2.RunsTest do
       assert [{:ok, moved}] = Enum.filter(results, &match?({:ok, _}, &1))
       assert [{:error, _}] = Enum.filter(results, &match?({:error, _}, &1))
       assert moved.column == :agent
-      assert length(Runs.list_runs()) == 1
+      assert length(Repo.all(Run)) == 1
       assert_receive {:request, "tab.create", %{"label" => label}}, 3_000
       assert label == String.slice(title, 0, 32)
       assert_receive {:request, "agent.start", _}, 3_000
@@ -319,6 +370,147 @@ defmodule Jarvis2.RunsTest do
       assert text =~ "Provide alternatives whenever applicable"
       assert_eventually(fn -> Journal.count(type: "run.start", run_id: moved.run_id) > 0 end)
       assert Runs.get_run(moved.run_id).status == :working
+    end
+
+    test "archive and restore retains session and history without duplicate deliveries", ctx do
+      alias Jarvis2.Kanban
+      run = working_run(ctx)
+      session = Ecto.UUID.generate()
+      run = run |> Ecto.Changeset.change(session_id: session, tab_id: "w1:t2") |> Repo.update!()
+      {:ok, card} = Kanban.create_card(%{title: "Archive", cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+
+      {:ok, round} =
+        Kanban.ask_questions(run.id, [%{title: "Decision", body: "Choose", recommended: "yes"}])
+
+      {:ok, round} =
+        Kanban.save_draft(round, %{"Q1" => %{"kind" => "recommended", "text" => "yes"}})
+
+      :ok = GenServer.call(ctx.mirror, {:put, with_run_pane("working")})
+      config(:kanban_delivery_wait_ms, 200)
+      {:ok, _} = Kanban.submit_answers(round)
+      assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) > 0 end)
+      assert Kanban.get_round(round.id).delivered_at == nil
+      {:ok, _} = Kanban.submit_deliverable(run.id, "previous result")
+      assert {:ok, archived} = Kanban.move(Kanban.get_card(card.id), :archive)
+      assert archived.run_id == run.id
+      assert archived.deliverable == "previous result"
+      assert Runs.get_run(run.id).status == :stopped
+      assert_receive {:request, "tab.close", %{"tab_id" => "w1:t2"}}
+      assert Runs.get_active_by_pane(run.pane_id) == nil
+
+      assert {:error, _} =
+               Kanban.ask_questions(run.id, [%{title: "x", body: "y", recommended: "z"}])
+
+      assert {:error, _} = Kanban.submit_deliverable(run.id, "bad")
+
+      for target <- [:scratch, :done, :awaiting_user],
+          do: assert({:error, _} = Kanban.move(archived, target))
+
+      assert {:error, _} = Kanban.reopen(archived, " ")
+      {:ok, restored} = Kanban.reopen(archived, "Revise it")
+      refute restored.run_id == run.id
+      new_run = Runs.get_run(restored.run_id)
+      assert new_run.session_id == session
+      assert new_run.task =~ "Restored from archive"
+      assert new_run.task =~ "Revise it"
+      assert new_run.task =~ "Decision"
+      assert %DateTime{} = Kanban.get_round(round.id).delivered_at
+      assert_receive {:request, "agent.start", %{"args" => args}}, 3_000
+      assert Enum.take(args, -2) == ["--session-id", session]
+      assert_receive {:request, "agent.prompt", %{"text" => text}}, 8_000
+      assert text =~ "Revise it"
+      assert_eventually(fn -> Runs.get_run(restored.run_id).status == :working end)
+    end
+
+    test "new scratch agents get new sessions and legacy archive restores cold", ctx do
+      alias Jarvis2.Kanban
+      {:ok, card} = Kanban.create_card(%{title: "Scratch", cwd: ctx.cwd})
+      {:ok, first} = Kanban.move(card, :agent)
+      assert_eventually(fn -> Runs.get_run(first.run_id).status == :working end, 500)
+      first_run = Runs.get_run(first.run_id)
+      assert {:ok, _} = Ecto.UUID.cast(first_run.session_id)
+      {:ok, scratch} = Kanban.move(Kanban.get_card(card.id), :scratch)
+      {:ok, second} = Kanban.move(scratch, :agent)
+      assert_eventually(fn -> Runs.get_run(second.run_id).status == :working end, 500)
+      second_run = Runs.get_run(second.run_id)
+      refute second_run.session_id == first_run.session_id
+      second_run |> Ecto.Changeset.change(session_id: nil) |> Repo.update!()
+      {:ok, archived} = Kanban.move(Kanban.get_card(card.id), :archive)
+      {:ok, restored} = Kanban.reopen(archived, "retry")
+      new_run = Runs.get_run(restored.run_id)
+      assert {:ok, _} = Ecto.UUID.cast(new_run.session_id)
+      assert new_run.task =~ "Restored from archive"
+      assert_eventually(fn -> Runs.get_run(restored.run_id).status == :working end, 500)
+    end
+
+    test "a failed restore keeps its session for a later retry", ctx do
+      alias Jarvis2.Kanban
+      session = Ecto.UUID.generate()
+
+      run =
+        working_run(ctx)
+        |> Ecto.Changeset.change(session_id: session, tab_id: "w1:t2")
+        |> Repo.update!()
+
+      {:ok, card} = Kanban.create_card(%{title: "Retry", cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+      {:ok, archived} = Kanban.move(Kanban.get_card(card.id), :archive)
+      Agent.update(ctx.behavior, &Map.put(&1, "tab.create", {:error, "invalid_request"}))
+      {:ok, attempted} = Kanban.reopen(archived, "First reason")
+      assert_eventually(fn -> Runs.get_run(attempted.run_id).status == :failed end)
+      assert Runs.get_run(attempted.run_id).session_id == session
+      {:ok, archived_again} = Kanban.move(Kanban.get_card(card.id), :archive)
+      Agent.update(ctx.behavior, &Map.delete(&1, "tab.create"))
+      # A failed launch puts the execution guard into a 60-second uncertainty cooldown.
+      guard = start_supervised!({ExecutionGuard, [name: nil]}, id: :retry_guard)
+      config(:execution_guard, guard)
+      {:ok, retry} = Kanban.reopen(archived_again, "Second reason")
+      assert Runs.get_run(retry.run_id).session_id == session
+      assert_eventually(fn -> Runs.get_run(retry.run_id).status == :working end, 1_500)
+    end
+
+    test "a non-Pi archived run starts a fresh Pi session", ctx do
+      alias Jarvis2.Kanban
+      old_id = Ecto.UUID.generate()
+
+      run =
+        working_run(ctx)
+        |> Ecto.Changeset.change(kind: "codex", session_id: old_id)
+        |> Repo.update!()
+
+      {:ok, card} = Kanban.create_card(%{title: "Other agent", cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+      {:ok, archived} = Kanban.move(Kanban.get_card(card.id), :archive)
+      {:ok, restored} = Kanban.reopen(archived, "Continue")
+      assert Runs.get_run(restored.run_id).session_id != old_id
+      assert_eventually(fn -> Runs.get_run(restored.run_id).status == :working end, 500)
+    end
+
+    test "archive cancels an open round and refuses unavailable or failed closes", ctx do
+      alias Jarvis2.Kanban
+      run = working_run(ctx) |> Ecto.Changeset.change(tab_id: "w1:t2") |> Repo.update!()
+      {:ok, card} = Kanban.create_card(%{title: "Working", cwd: ctx.cwd})
+      card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+
+      {:ok, round} =
+        Kanban.ask_questions(run.id, [%{title: "Q", body: "Body", recommended: "yes"}])
+
+      :ok = GenServer.call(ctx.mirror, {:put, %{view() | stale: true}})
+      assert {:error, _} = Kanban.move(Kanban.get_card(card.id), :archive)
+      assert Kanban.get_card(card.id).column == :awaiting_user
+      assert Kanban.get_round(round.id).status == :open
+      :ok = GenServer.call(ctx.mirror, {:put, with_run_pane("idle")})
+      Agent.update(ctx.behavior, &Map.put(&1, "tab.close", {:error, "failed"}))
+      assert {:error, _} = Kanban.move(Kanban.get_card(card.id), :archive)
+      assert Runs.get_run(run.id).status == :working
+      Agent.update(ctx.behavior, &Map.delete(&1, "tab.close"))
+      assert {:ok, archived} = Kanban.move(Kanban.get_card(card.id), :archive)
+      assert archived.column == :archive
+      assert Kanban.get_round(round.id).status == :cancelled
+      :ok = GenServer.call(ctx.mirror, {:put, %{view() | stale: true}})
+      assert {:error, _} = Kanban.reopen(archived, "try again")
+      assert Kanban.get_card(card.id).column == :archive
     end
 
     test "reopen delivers feedback to the same pane", ctx do
@@ -332,7 +524,7 @@ defmodule Jarvis2.RunsTest do
       assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
       assert text =~ "Add alternatives"
       assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) > 0 end)
-      assert length(Runs.list_runs()) == 1
+      assert length(Repo.all(Run)) == 1
     end
 
     test "a dead run is replaced with the plan, latest answers and reopen feedback", ctx do
@@ -500,7 +692,7 @@ defmodule Jarvis2.RunsTest do
       Phoenix.PubSub.subscribe(Jarvis2.PubSub, Runs.topic())
       assert {:ok, %{exit_status: 0, output: "mix test ran\n"}} = Runs.run_mix("test", nil)
 
-      assert [%Run{kind: "mix", name: "mix test", status: :done} = run] = Runs.list_runs()
+      assert [%Run{kind: "mix", name: "mix test", status: :done} = run] = Repo.all(Run)
       assert run.cwd == ctx.cwd
       assert run.result["exit_status"] == 0
       assert run.result["output"] == "mix test ran\n"
@@ -519,7 +711,7 @@ defmodule Jarvis2.RunsTest do
       {:ok, parent} = Runs.create_run(%{name: "agent", task: "t", cwd: ctx.cwd})
 
       assert {:ok, %{exit_status: 2}} = Runs.run_mix("compile", nil, parent_run_id: parent.id)
-      [mix_run] = Runs.list_runs(status: :failed)
+      [mix_run] = Repo.all(from r in Run, where: r.status == :failed)
       assert %Run{kind: "mix", parent_run_id: parent_id} = mix_run
       assert parent_id == parent.id
       assert %{outcome: :error} = List.last(Journal.recent(run_id: mix_run.id))
@@ -527,18 +719,17 @@ defmodule Jarvis2.RunsTest do
 
     test "disallowed tasks and projects never create a run", ctx do
       assert {:error, "Mix task is not allowed"} = Runs.run_mix("deps.get", nil)
-      assert {:error, "Mix task is not allowed"} = Runs.start_mix("deps.get")
-      assert Runs.list_runs() == []
+      assert Repo.all(Run) == []
 
       assert {:error, "project must be the configured trusted project"} =
                Runs.run_mix("test", Path.join(ctx.cwd, "elsewhere"))
 
-      assert [%Run{status: :failed, result: %{"error" => "project" <> _}}] = Runs.list_runs()
+      assert [%Run{status: :failed, result: %{"error" => "project" <> _}}] = Repo.all(Run)
     end
 
     test "Mix runs cannot be stopped and are failed if the server died mid-run", ctx do
       {:ok, _} = Runs.run_mix("test", nil)
-      [done] = Runs.list_runs()
+      [done] = Repo.all(Run)
       assert {:error, "Mix runs finish on their own."} = Runs.stop_run(done)
 
       {:ok, orphan} =
@@ -604,6 +795,7 @@ defmodule Jarvis2.RunsTest do
   defp respond(%{"method" => method}, _mirror, behavior) when is_map_key(behavior, method) do
     case behavior[method] do
       {:error, code} -> {:reply, %{error: %{code: code, message: "simulated"}}}
+      {:reply, result} -> {:reply, %{result: result}}
     end
   end
 
@@ -613,8 +805,8 @@ defmodule Jarvis2.RunsTest do
   end
 
   defp respond(%{"method" => "tab.create"}, _mirror, _) do
-    pane = %{pane_id: "w1:p9", terminal_id: "term-run", workspace_id: "w1", tab_id: "w1:t1"}
-    {:reply, %{result: %{type: "tab_created", root_pane: pane}}}
+    pane = %{pane_id: "w1:p9", terminal_id: "term-run", workspace_id: "w1", tab_id: "w1:t2"}
+    {:reply, %{result: %{type: "tab_created", tab: %{tab_id: "w1:t2"}, root_pane: pane}}}
   end
 
   defp respond(%{"method" => "pane.process_info"}, _mirror, _) do
@@ -636,6 +828,11 @@ defmodule Jarvis2.RunsTest do
 
   defp respond(%{"method" => "agent.prompt"}, _mirror, _),
     do: {:reply, %{result: %{type: "agent_prompt", submitted: true}}}
+
+  defp respond(%{"method" => "tab.close"}, mirror, _) do
+    :ok = GenServer.call(mirror, {:put, view()})
+    {:reply, %{result: %{type: "ok"}}}
+  end
 
   defp respond(%{"method" => "pane.close"}, _mirror, _), do: {:reply, %{result: %{type: "ok"}}}
 
@@ -670,7 +867,7 @@ defmodule Jarvis2.RunsTest do
     pane = %{
       "pane_id" => "w1:p9",
       "workspace_id" => "w1",
-      "tab_id" => "w1:t1",
+      "tab_id" => "w1:t2",
       "terminal_id" => terminal
     }
 
@@ -684,7 +881,20 @@ defmodule Jarvis2.RunsTest do
       })
 
     base
-    |> update_in([:snapshot, "panes"], &(&1 ++ [pane]))
+    |> update_in([:snapshot, "tabs"], &(&1 ++ [%{"workspace_id" => "w1", "tab_id" => "w1:t2"}]))
+    |> update_in(
+      [:snapshot, "panes"],
+      &(&1 ++
+          [
+            pane,
+            %{
+              "pane_id" => "w1:p10",
+              "workspace_id" => "w1",
+              "tab_id" => "w1:t2",
+              "terminal_id" => "other"
+            }
+          ])
+    )
     |> update_in([:snapshot, "agents"], &(&1 ++ [agent]))
   end
 

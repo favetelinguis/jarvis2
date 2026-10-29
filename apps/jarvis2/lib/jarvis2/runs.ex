@@ -25,23 +25,8 @@ defmodule Jarvis2.Runs do
     }
   end
 
-  def change_run(run \\ %Run{}, attrs \\ %{}), do: Run.changeset(run, attrs)
-
   def get_run(id) do
     with {:ok, uuid} <- Ecto.UUID.cast(id), %Run{} = run <- Repo.get(Run, uuid), do: run
-  end
-
-  def list_runs(opts \\ []) do
-    Run
-    |> then(fn q ->
-      case Keyword.get(opts, :status) do
-        nil -> q
-        status -> where(q, [r], r.status == ^status)
-      end
-    end)
-    |> order_by(desc: :inserted_at)
-    |> limit(^Keyword.get(opts, :limit, 200))
-    |> Repo.all()
   end
 
   def active_runs,
@@ -73,14 +58,6 @@ defmodule Jarvis2.Runs do
     end
   end
 
-  @doc "Creates a run and launches it in the background."
-  def start_run(attrs) do
-    with {:ok, run} <- create_run(attrs) do
-      {:ok, _} = Task.Supervisor.start_child(Jarvis2.TaskSupervisor, fn -> launch(run) end)
-      {:ok, run}
-    end
-  end
-
   @doc "Runs the launch sequence for a `:starting` run and records the outcome."
   def launch(run, on_prompt \\ fn _ -> :ok end, label \\ nil)
 
@@ -91,6 +68,7 @@ defmodule Jarvis2.Runs do
           run
           |> progress(%{
             status: :working,
+            tab_id: info.tab_id,
             pane_id: info.pane_id,
             terminal_id: info.terminal_id,
             agent_name: info.agent_name,
@@ -135,16 +113,6 @@ defmodule Jarvis2.Runs do
     end
   end
 
-  @doc "Starts a Mix run in the background (from the UI)."
-  def start_mix(task) do
-    if task in MixRunner.tasks() do
-      {:ok, _} = Task.Supervisor.start_child(Jarvis2.TaskSupervisor, fn -> run_mix(task, nil) end)
-      :ok
-    else
-      {:error, "Mix task is not allowed"}
-    end
-  end
-
   defp finish_mix(run, {:ok, %{exit_status: status} = result}) do
     run
     |> progress(%{
@@ -165,7 +133,7 @@ defmodule Jarvis2.Runs do
     |> record("run.mix", %{error: message}, :error)
   end
 
-  @doc "Closes the run's pane (when it is still ours) and marks the run stopped."
+  @doc "Closes the run’s tab (or its legacy pane) and marks the run stopped."
   def stop_run(%Run{kind: "mix"}), do: {:error, "Mix runs finish on their own."}
 
   def stop_run(%Run{} = run) do
@@ -187,8 +155,6 @@ defmodule Jarvis2.Runs do
     record(run, "run.stop", %{error: message}, :error)
     {:error, message}
   end
-
-  def focus_run(%Run{} = run), do: Launcher.focus(run)
 
   @doc "An agent's final result (via MCP): finishes the run and cancels open questions."
   def submit_result(run_id, summary, artifacts) do

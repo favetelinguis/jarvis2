@@ -1,7 +1,7 @@
 # Jarvis2
 
 A Phoenix / LiveView control plane for [Herdr](https://herdr.dev). From the browser you can watch the
-live Herdr session, start a Pi agent in a new pane, steer it, and answer the questions and approvals it
+live Herdr session, start a Pi agent from a board card, and answer the questions and approvals it
 raises through MCP. Everything that matters is stored in SQLite, so a restart loses nothing but the
 in-memory Herdr mirror.
 
@@ -34,12 +34,11 @@ A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bi
 ## The showcase: a Pi agent on `openrouter/openai/gpt-6-luna`
 
 1. Start with `mix run --no-halt` and sign in.
-2. **New run**: the form is prefilled with agent `pi`, model `openrouter/openai/gpt-6-luna`, thinking `low`.
-   Give it a task, for example _Ask me which file to change, then ask for approval before editing_.
-3. Jarvis2 creates a tab in the `jarvis2` workspace, starts Pi in its root pane with
-   `--provider openrouter --model openai/gpt-6-luna --thinking low` and a Jarvis2 MCP extension, and delivers the task. The run page
-   shows status and a live timeline. The agent's questions appear as cards on the run
-   page and in the **Inbox**; answering unblocks it. `submit_result` finishes the run.
+2. On **Kanban**, add a card with an idea, then drag it to **Agent**. The default agent is Pi,
+   model `openrouter/openai/gpt-6-luna`, thinking `low`.
+3. Jarvis2 creates a tab in the `jarvis2` workspace, starts Pi with a Jarvis2 MCP extension,
+   and delivers the card. Answer card questions on the board and other questions in **Inbox**.
+   When finished, archive the card to close its tab; restore it with a reason to reload its Pi session.
 
 `MODEL=luna scripts/live-tour.sh` sets up an isolated Herdr session for a manual showcase
 (it uses your real Pi configuration and OpenRouter credits).
@@ -54,20 +53,18 @@ repository's `.pi/mcp.json` after project trust, or add its `jarvis2` entry to `
 | Route                             | Purpose                                                                                                                               |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `/`                               | Dashboard: connection, workspace → tab → pane tree, agents, worktrees, layout diff, recent events, _Apply dev layout_ |
-| `/runs`, `/runs/new`, `/runs/:id` | Runs with status filter; start form; run page with questions, prompt box, timeline, stop; Mix jobs                     |
-| `/kanban`                         | Deliverables board: plan, research, explain, review or refine; answer questions, copy and reopen results |
+| `/kanban` | Deliverables board; archive cards to close their tab and restore with a reason and Pi session reload |
 | `/inbox`                          | Every pending question and approval, with a count badge in the navigation                                                             |
 | `/blackboard`                     | Notes shared between agents and you (JSON values)                                                                                     |
 | `/events`                         | The journal, filterable by source, type prefix and run                                                                                |
-| `/settings`                       | Which actions are enabled and defaults for new runs                                                                |
+| `/settings` | Which actions are enabled and defaults for new card agents |
 
 Every page except `/login`, `/healthz`, `/status` and `/mcp` needs a session.
 
 ## MCP tools
 
 The MCP endpoint (`/mcp`, streamable HTTP) is unauthenticated. Run-only tools resolve the active run
-from the pane header. Agent state comes from Herdr; pending questions and approvals appear on the
-run page and in `/inbox`, even while Herdr shows the agent as working. Every tool has a UI surface
+from the pane header. Agent state comes from Herdr; pending questions and approvals appear in `/inbox`, even while Herdr shows the agent as working. Every tool has a UI surface
 or is agent-only:
 
 | Tool                                               | Where you see it                                                        |
@@ -78,15 +75,19 @@ or is agent-only:
 | `read_agent`                                       | agent-only                                                              |
 | `prompt_agent`, `spawn_agent`, `run_command`       | `fleet.*` rows in `/events`                                             |
 | `apply_layout`                                     | _Apply dev layout_ on `/`                                               |
-| `run_mix`                                          | a run of kind `mix` on `/runs`                                          |
-| `ask_human`, `request_approval`, `wait_for_answer` | run page and `/inbox` (run pane only)                                 |
-| `submit_result`                                    | run page _Result_ (run pane only)                                     |
+| `run_mix` | job data in the `runs` table; calls appear in `/events` |
+| `ask_human`, `request_approval`, `wait_for_answer` | `/inbox` and `/events` (run pane only) |
+| `submit_result` | agent-only; calls appear in `/events` (run pane only) |
 | `ask_questions`, `submit_deliverable`             | kanban card (kanban run pane only)                                    |
 
 Resources: `jarvis2://session`, `layout` and `worktrees` (dashboard), `events/recent` and `journal`
 (`/events`), `blackboard` (`/blackboard`). `jarvis2://layout` includes the net layout diff (membership,
 focus, geometry, split ratios, agent state; limited to 64 changes, `resynced` after a subscription gap,
 `unavailable` when invalid or oversized). Browser-origin requests to `/mcp` are rejected.
+
+Only the board UI moves cards into or out of Archive; MCP has no archive or restore tool. Restore
+prompts include the reason and bounded card context; exceptionally long ideas may be truncated to
+fit the task limit. If the saved Pi session is missing, Pi starts a fresh session with that context.
 
 Kanban kinds other than plan instruct the agent not to edit or publish changes, but this is a prompt rule,
 not a sandbox. Agents started before the `submit_plan` rename must be restarted by moving their card to

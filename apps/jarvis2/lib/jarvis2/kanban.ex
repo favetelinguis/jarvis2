@@ -183,13 +183,26 @@ defmodule Jarvis2.Kanban do
     with :ok <- availability(), do: start_or_resume(card, :scratch, nil)
   end
 
+  def move(%Card{column: :archive}, _to),
+    do: {:error, "Restore an archived card with a reason."}
+
   def move(%Card{column: column} = card, to)
       when column in [:agent, :awaiting_user] and to in [:scratch, "scratch"] do
+    stop_and_move(card, :scratch, [:agent, :awaiting_user])
+  end
+
+  def move(%Card{column: column} = card, to)
+      when column != :archive and to in [:archive, "archive"] do
+    stop_and_move(card, :archive, column)
+  end
+
+  def move(%Card{}, _to), do: {:error, "That move is not allowed."}
+
+  defp stop_and_move(card, target, from) do
     transaction(
       fn ->
-        transition!(card.id, [:agent, :awaiting_user], :scratch)
+        transition!(card.id, from, target)
         current = get_card(card.id)
-
         stop_if_active!(current.run)
 
         Repo.update_all(from(r in Round, where: r.card_id == ^card.id and r.status == :open),
@@ -199,11 +212,9 @@ defmodule Jarvis2.Kanban do
         Repo.get!(Card, card.id)
       end,
       card.id,
-      "kanban.scratch"
+      "kanban.#{target}"
     )
   end
-
-  def move(%Card{}, _to), do: {:error, "That move is not allowed."}
 
   defp stop_if_active!(%Run{status: :starting}),
     do: Repo.rollback("Wait for the agent to finish starting.")
@@ -219,12 +230,13 @@ defmodule Jarvis2.Kanban do
 
   defp stop_if_active!(_), do: :ok
 
-  def reopen(%Card{column: :done} = card, text) when is_binary(text) do
+  def reopen(%Card{column: column} = card, text)
+      when column in [:done, :archive] and is_binary(text) do
     text = String.trim(text)
     changeset = Feedback.changeset(%Feedback{}, %{card_id: card.id, text: text})
 
     if changeset.valid? do
-      with :ok <- availability(), do: start_or_resume(card, :done, text)
+      with :ok <- availability(), do: start_or_resume(card, column, text)
     else
       {:error, "Feedback is required and must be at most 1000 bytes."}
     end
@@ -238,6 +250,7 @@ defmodule Jarvis2.Kanban do
         fn ->
           transition!(card.id, from, :agent)
           current = get_card(card.id)
+          if from == :archive, do: mark_stale_delivered(card.id)
 
           item =
             if feedback,
@@ -245,7 +258,7 @@ defmodule Jarvis2.Kanban do
                 Repo.insert!(Feedback.changeset(%Feedback{}, %{card_id: card.id, text: feedback})),
               else: nil
 
-          prepare_agent!(current, item, feedback)
+          prepare_agent!(current, item, feedback, from)
         end,
         card.id,
         "kanban.agent"
@@ -265,17 +278,38 @@ defmodule Jarvis2.Kanban do
     end
   end
 
-  defp prepare_agent!(%Card{run: %Run{} = run} = card, item, feedback) do
-    if Run.active?(run), do: {:resume, item}, else: create_agent!(card, item, feedback)
+  defp mark_stale_delivered(card_id) do
+    now = DateTime.utc_now()
+
+    Repo.update_all(
+      from(r in Round,
+        where: r.card_id == ^card_id and r.status == :answered and is_nil(r.delivered_at)
+      ),
+      set: [delivered_at: now]
+    )
+
+    Repo.update_all(from(f in Feedback, where: f.card_id == ^card_id and is_nil(f.delivered_at)),
+      set: [delivered_at: now]
+    )
   end
 
-  defp prepare_agent!(card, item, feedback), do: create_agent!(card, item, feedback)
+  defp prepare_agent!(%Card{run: %Run{} = run} = card, item, feedback, from)
+       when from != :archive do
+    if Run.active?(run), do: {:resume, item}, else: create_agent!(card, item, feedback, from)
+  end
 
-  defp create_agent!(card, item, feedback) do
+  defp prepare_agent!(card, item, feedback, from), do: create_agent!(card, item, feedback, from)
+
+  defp create_agent!(card, item, feedback, from) do
+    restored = from == :archive
+    session_id = if (restored and card.run) && card.run.kind == "pi", do: card.run.session_id
+    session_id = session_id || Ecto.UUID.generate()
+
     attrs = %{
       name: String.slice(card.title, 0, 64),
       cwd: card.cwd,
-      task: Prompt.build(card, card.rounds, feedback)
+      task: Prompt.build(card, card.rounds, feedback, restored: restored),
+      session_id: session_id
     }
 
     case Runs.create_run(attrs) do

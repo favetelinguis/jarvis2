@@ -16,6 +16,8 @@ defmodule Jarvis2.Runs.Run do
     field(:cwd, :string)
     field(:task, :string)
     field(:status, Ecto.Enum, values: @statuses, default: :starting)
+    field(:session_id, :string)
+    field(:tab_id, :string)
     field(:pane_id, :string)
     field(:terminal_id, :string)
     field(:agent_name, :string)
@@ -35,12 +37,13 @@ defmodule Jarvis2.Runs.Run do
 
   def changeset(run, attrs) do
     run
-    |> cast(attrs, [:name, :kind, :model, :thinking, :cwd, :task, :parent_run_id])
+    |> cast(attrs, [:name, :kind, :model, :thinking, :cwd, :task, :parent_run_id, :session_id])
     |> validate_required([:name, :kind, :model, :thinking, :cwd, :task])
     |> validate_length(:name, max: 64)
     |> validate_length(:task, max: 6_000, count: :bytes)
     |> validate_inclusion(:kind, Jarvis2.Herdr.Actions.agent_kinds())
     |> validate_inclusion(:thinking, @thinking)
+    |> validate_format(:session_id, ~r/\A[A-Za-z0-9]([A-Za-z0-9._-]{0,62}[A-Za-z0-9])?\z/)
     |> validate_model_field(:model)
     |> validate_cwd()
   end
@@ -63,6 +66,7 @@ defmodule Jarvis2.Runs.Run do
   def progress_changeset(run, attrs) do
     cast(run, attrs, [
       :status,
+      :tab_id,
       :pane_id,
       :terminal_id,
       :agent_name,

@@ -3,7 +3,7 @@ defmodule Jarvis2.Kanban.Prompt do
 
   alias Jarvis2.Kanban.Kind
 
-  def build(card, rounds \\ [], feedback \\ nil) do
+  def build(card, rounds \\ [], feedback \\ nil, opts \\ []) do
     prior_feedback = if Ecto.assoc_loaded?(card.feedback), do: card.feedback, else: []
 
     history =
@@ -12,11 +12,20 @@ defmodule Jarvis2.Kanban.Prompt do
       |> Enum.map(&history_item/1)
       |> Enum.reject(&(&1 == ""))
 
-    feedback = if feedback, do: "Reopen feedback: " <> feedback <> "\n", else: ""
+    lead =
+      if opts[:restored],
+        do:
+          "Restored from archive; your earlier conversation was reloaded if it still exists. Reason: ",
+        else: "Reopen feedback: "
 
-    base =
-      Kind.protocol(card.kind) <>
-        "\n\nCard: " <> card.title <> "\nIdea: " <> (card.body || "") <> "\n" <> feedback
+    feedback = if feedback, do: lead <> feedback <> "\n", else: ""
+
+    prefix = Kind.protocol(card.kind) <> "\n\nCard: " <> card.title <> "\nIdea: "
+    suffix = "\n" <> feedback
+
+    # The full restore reason takes priority when the protocol and maximum-sized body exceed the task cap.
+    body_budget = max(0, 6_000 - byte_size(prefix) - byte_size(suffix))
+    base = prefix <> truncate(card.body || "", body_budget) <> suffix
 
     history_budget = max(0, 6_000 - byte_size(base))
     reserve = if card.deliverable, do: min(300, history_budget), else: 0

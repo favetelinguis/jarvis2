@@ -1,5 +1,5 @@
 defmodule Jarvis2Web.QuestionActions do
-  @moduledoc "Answering a question from a LiveView; shared by the run page and the inbox."
+  @moduledoc "Answering an inbox question from a LiveView."
   import Phoenix.LiveView, only: [put_flash: 3]
 
   alias Jarvis2.Questions
