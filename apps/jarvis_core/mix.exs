@@ -11,7 +11,7 @@ defmodule JarvisCore.MixProject do
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       elixirc_paths: elixirc_paths(Mix.env()),
-      deps: [{:herdr_client, in_umbrella: true}, {:jason, "~> 1.4"}]
+      deps: [{:herdr_client, in_umbrella: true}, {:jason, "~> 1.4"}, {:phoenix_pubsub, "~> 2.1"}]
     ]
   end
 

@@ -8,7 +8,7 @@ defmodule Jarvis2.MCP.EventWait do
 
     if valid_type?(type) and valid_filters?(filters) do
       topic = "herdr:" <> type
-      {:ok, _} = Jarvis2.Bus.subscribe(topic)
+      :ok = Jarvis2.Bus.subscribe(topic)
 
       try do
         receive_matching(topic, filters, System.monotonic_time(:millisecond) + timeout_s * 1_000)

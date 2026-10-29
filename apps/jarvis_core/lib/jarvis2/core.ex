@@ -3,7 +3,7 @@ defmodule Jarvis2.Core do
 
   def child_specs do
     [
-      {Registry, keys: :duplicate, name: Jarvis2.Registry},
+      {Phoenix.PubSub, name: Jarvis2.PubSub},
       Supervisor.child_spec({Registry, keys: :unique, name: Jarvis2.MixRegistry},
         id: Jarvis2.MixRegistry
       ),

@@ -568,7 +568,7 @@ defmodule Jarvis2.MCPTest do
         })
       end)
 
-    eventually(fn -> Registry.lookup(Jarvis2.Registry, topic) != [] end)
+    eventually(fn -> Registry.lookup(Jarvis2.PubSub, topic) != [] end)
     Jarvis2.Bus.publish(topic, %{type: "pane.jarvis_test", data: %{"pane_id" => "w1:p2"}})
     assert Task.yield(task, 50) == nil
 
@@ -578,7 +578,7 @@ defmodule Jarvis2.MCPTest do
     })
 
     assert Task.await(task, 3_000)["event"]["data"]["agent_status"] == "done"
-    assert Registry.lookup(Jarvis2.Registry, topic) == []
+    assert Registry.lookup(Jarvis2.PubSub, topic) == []
 
     assert call_tool(ctx, headers, "wait_for_event", %{
              match: %{type: "pane.jarvis_timeout"},
@@ -600,7 +600,7 @@ defmodule Jarvis2.MCPTest do
         })
       end)
 
-    eventually(fn -> Registry.lookup(Jarvis2.Registry, topic) != [] end)
+    eventually(fn -> Registry.lookup(Jarvis2.PubSub, topic) != [] end)
 
     producer =
       Task.async(fn ->
