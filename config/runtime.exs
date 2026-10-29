@@ -8,6 +8,7 @@ if config_env() == :test do
     state_dir: state_dir,
     events: false,
     scenarios: false,
+    run_monitor: false,
     live: false,
     allow_eval: false
 
@@ -47,6 +48,7 @@ else
     state_dir: state_dir,
     live: System.get_env("JARVIS2_LIVE") == "1",
     live_scenarios: scenarios,
+    anchor_pane: System.get_env("HERDR_PANE_ID"),
     allow_eval: System.get_env("JARVIS2_ALLOW_EVAL") == "1",
     mix_project_dir: File.cwd!()
 

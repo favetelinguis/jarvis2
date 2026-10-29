@@ -103,6 +103,8 @@ defmodule Jarvis2.Herdr.Actions do
 
   @agent_kinds ~w(pi claude codex gemini cursor devin agy cline omp mastracode opencode copilot kimi kiro droid amp grok hermes kilo qodercli qwen letta maki muse)
 
+  def agent_kinds, do: @agent_kinds
+
   def spawn_agent(caller, args, opts \\ []) do
     name = args[:name]
     kind = args[:kind]

@@ -20,6 +20,11 @@ defmodule Jarvis2.Application do
         children
       end
 
+    children =
+      if Application.get_env(:jarvis2, :run_monitor, true),
+        do: children ++ [Jarvis2.Runs.Monitor],
+        else: children
+
     children = children ++ Jarvis2.MCP.child_specs() ++ [Jarvis2Web.Endpoint]
 
     with {:ok, _} = started <-
