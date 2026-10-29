@@ -17,6 +17,33 @@ defmodule Jarvis2Web.KanbanLiveTest do
     assert Kanban.get_card(card.id).column == :scratch
   end
 
+  test "card details retain their browser-controlled open state during form updates", %{
+    conn: conn
+  } do
+    {:ok, view, _} = live(conn, "/kanban")
+
+    assert has_element?(
+             view,
+             ~s(#card-form details[phx-mounted*="ignore_attrs"][phx-mounted*="open"])
+           )
+
+    attrs = %{title: "Idea", body: "An idea", cwd: File.cwd!(), kind: "refine"}
+    view |> form("#card-form", card: attrs) |> render_change()
+
+    assert has_element?(
+             view,
+             ~s(#card-form details[phx-mounted*="ignore_attrs"][phx-mounted*="open"])
+           )
+
+    assert has_element?(view, "#card_body", "An idea")
+    assert has_element?(view, ~s(#card_cwd[value="#{File.cwd!()}"]))
+    assert render(view) =~ "Paste the Jira ticket text"
+
+    view |> form("#card-form", card: attrs) |> render_submit()
+    assert [%{body: "An idea", cwd: cwd, kind: :refine}] = Kanban.list_cards()
+    assert cwd == File.cwd!()
+  end
+
   test "chooses a kind, shows its badge and copies a finished deliverable", %{conn: conn} do
     {:ok, view, _} = live(conn, "/kanban")
 

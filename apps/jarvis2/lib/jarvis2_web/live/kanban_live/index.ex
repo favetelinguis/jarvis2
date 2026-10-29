@@ -2,6 +2,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
   # Interview drafts and feedback must not be included in LiveView's parameter logs.
   use Phoenix.LiveView, layout: {Jarvis2Web.Layouts, :app}, log: false
   import Jarvis2Web.Components
+  alias Phoenix.LiveView.JS
   alias Jarvis2.{Kanban, Runs}
   alias Jarvis2.Kanban.{Card, Kind}
 
@@ -176,7 +177,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
             </select>
             <.errors field={@form[:kind]} />
           </label>
-          <details>
+          <details id="card-details" phx-mounted={JS.ignore_attributes("open")}>
             <summary>Idea and working directory</summary>
             <.field field={@form[:body]} type="textarea" label="Idea" placeholder={kind_hint(@form)} />
             <small>{kind_hint(@form)}</small>
