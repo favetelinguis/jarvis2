@@ -1,6 +1,6 @@
 defmodule Jarvis2.WorkflowsTest do
-  use ExUnit.Case, async: false
-  alias Jarvis2.Scenarios.TestLoop
+  use Jarvis2.DataCase, async: false
+  alias Jarvis2.Automations.TestLoop
 
   # One process plays both Herdr and the mirror so they never disagree.
   defmodule World do
@@ -166,6 +166,9 @@ defmodule Jarvis2.WorkflowsTest do
     assert text =~ "failed (exit 2)"
     refute text =~ "JARVIS2_EXIT"
     assert_receive {:jarvis2, "scenario:test_loop", %{result: :failed}}, 5_000
+
+    assert [%{type: "automation.test_loop", outcome: :error, payload: %{"result" => "failed"}}] =
+             Jarvis2.Journal.recent(source: :automation)
   end
 
   test "test loop does not prompt when tests pass, in dry mode, or outside the project" do
@@ -182,6 +185,9 @@ defmodule Jarvis2.WorkflowsTest do
     status_change("idle")
     assert_receive {:jarvis2, "scenario:test_loop", %{result: :passed}}, 5_000
     refute_receive {:request, "agent.prompt", _}, 100
+
+    assert [%{type: "automation.test_loop", outcome: :ok}] =
+             Jarvis2.Journal.recent(source: :automation)
 
     refute TestLoop.trusted_project?("/tmp")
     refute TestLoop.trusted_project?(nil)

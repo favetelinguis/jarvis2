@@ -35,9 +35,9 @@ defmodule Jarvis2.MCP.MixRunner do
         case Registry.register(Jarvis2.MixRegistry, :run, nil) do
           {:ok, _} ->
             try do
-              worker = Jarvis2.Scenarios.CustomWorker.start(task)
+              worker = Jarvis2.Automations.CustomWorker.start(task)
               result = execute(timeout, mix, Map.fetch!(@commands, task), root, timeout_ms)
-              Jarvis2.Scenarios.CustomWorker.finish(worker, result)
+              Jarvis2.Automations.CustomWorker.finish(worker, result)
               result
             after
               Registry.unregister(Jarvis2.MixRegistry, :run)

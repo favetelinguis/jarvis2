@@ -1,4 +1,4 @@
-defmodule Jarvis2.Scenarios.Presentation do
+defmodule Jarvis2.Automations.Presentation do
   @moduledoc "Maintain short-lived sidebar tokens and optional pane labels."
   use GenServer
   require Logger
@@ -164,17 +164,7 @@ defmodule Jarvis2.Scenarios.Presentation do
         ttl_ms: @ttl_ms
       }
 
-      expires_at = System.system_time(:millisecond) + @ttl_ms
-
-      if write(:sidebar_tokens, "workspace.report_metadata", params, entry.pane, socket) == :ok do
-        Jarvis2.Scenarios.Restore.record_token(
-          "workspace.report_metadata",
-          params,
-          entry.pane,
-          view,
-          expires_at
-        )
-      end
+      write(:sidebar_tokens, "workspace.report_metadata", params, entry.pane, socket)
     end
   end
 
@@ -191,17 +181,7 @@ defmodule Jarvis2.Scenarios.Presentation do
         ttl_ms: @ttl_ms
       }
 
-      expires_at = System.system_time(:millisecond) + @ttl_ms
-
-      if write(:sidebar_tokens, "pane.report_metadata", params, entry.pane, socket) == :ok do
-        Jarvis2.Scenarios.Restore.record_token(
-          "pane.report_metadata",
-          params,
-          entry.pane,
-          view,
-          expires_at
-        )
-      end
+      write(:sidebar_tokens, "pane.report_metadata", params, entry.pane, socket)
     end
   end
 

@@ -309,7 +309,7 @@ defmodule Jarvis2.MCPTest do
     replace_config(:live_scenarios, [:sidebar_tokens, :pane_hygiene])
 
     start_supervised!(
-      {Jarvis2.Scenarios.Presentation,
+      {Jarvis2.Automations.Presentation,
        [name: nil, mirror: ctx.mirror, socket: socket, debounce_ms: 20]}
     )
 

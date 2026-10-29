@@ -7,7 +7,7 @@ if config_env() == :test do
   config :jarvis2,
     state_dir: state_dir,
     events: false,
-    scenarios: false,
+    automations: false,
     run_monitor: false,
     apply_settings: false,
     live: false,

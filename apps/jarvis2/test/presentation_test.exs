@@ -2,7 +2,7 @@ defmodule Jarvis2.PresentationTest do
   use ExUnit.Case, async: false
 
   alias Jarvis2.Herdr.Socket
-  alias Jarvis2.Scenarios.Presentation
+  alias Jarvis2.Automations.Presentation
 
   defmodule Mirror do
     use GenServer

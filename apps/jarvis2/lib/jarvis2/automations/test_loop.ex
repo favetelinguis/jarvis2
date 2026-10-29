@@ -1,4 +1,4 @@
-defmodule Jarvis2.Scenarios.TestLoop do
+defmodule Jarvis2.Automations.TestLoop do
   @moduledoc """
   Test loop (U14): when an agent in a trusted Mix project finishes a turn, run `mix test` in
   a sibling pane and, on failure, prompt the agent with the output tail.
@@ -63,6 +63,13 @@ defmodule Jarvis2.Scenarios.TestLoop do
       end
 
     Logger.info("Herdr test loop pane=#{inspect(pane)} result=#{result}")
+
+    Jarvis2.Journal.record(%{
+      source: :automation,
+      type: "automation.test_loop",
+      outcome: if(result == :passed, do: :ok, else: :error),
+      payload: %{pane: pane, result: result}
+    })
 
     Phoenix.PubSub.local_broadcast(
       Jarvis2.PubSub,

@@ -1,4 +1,4 @@
-defmodule Jarvis2.Scenarios.OutputWatcher do
+defmodule Jarvis2.Automations.OutputWatcher do
   @moduledoc "Route matched agent output to human notifications."
   use GenServer
   require Logger
@@ -35,6 +35,13 @@ defmodule Jarvis2.Scenarios.OutputWatcher do
           server: state.socket,
           caller: pane
         )
+
+      Jarvis2.Journal.record(%{
+        source: :automation,
+        type: "automation.output_watcher",
+        outcome: if(match?({:ok, %{dry_run: true}}, result), do: :dry_run, else: :ok),
+        payload: %{pane: pane}
+      })
 
       Phoenix.PubSub.local_broadcast(
         Jarvis2.PubSub,

@@ -7,8 +7,8 @@ defmodule Jarvis2.Application do
     children = Jarvis2.Core.child_specs()
 
     children =
-      if Application.get_env(:jarvis2, :scenarios, true) do
-        children ++ Jarvis2.Scenarios.child_specs()
+      if Application.get_env(:jarvis2, :automations, true) do
+        children ++ Jarvis2.Automations.child_specs()
       else
         children
       end

@@ -1,4 +1,4 @@
-defmodule Jarvis2.Scenarios.Attention do
+defmodule Jarvis2.Automations.Attention do
   @moduledoc "Route blocked and completed agent states to human attention."
   use GenServer
   require Logger
@@ -80,6 +80,12 @@ defmodule Jarvis2.Scenarios.Attention do
     })
 
     invoke(state, pane, "client.window_title.set", %{title: "Jarvis2: agent #{status}"})
+
+    Jarvis2.Journal.record(%{
+      source: :automation,
+      type: "automation.attention",
+      payload: %{pane: pane, state: status}
+    })
 
     Phoenix.PubSub.local_broadcast(
       Jarvis2.PubSub,

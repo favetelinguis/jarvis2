@@ -1,8 +1,8 @@
-defmodule Jarvis2.ScenariosTest do
-  use ExUnit.Case, async: false
+defmodule Jarvis2.AutomationsTest do
+  use Jarvis2.DataCase, async: false
 
   alias Jarvis2.Herdr.Socket
-  alias Jarvis2.Scenarios.{Attention, OutputWatcher}
+  alias Jarvis2.Automations.{Attention, OutputWatcher}
 
   setup do
     previous_live = Application.get_env(:jarvis2, :live, false)
@@ -41,6 +41,12 @@ defmodule Jarvis2.ScenariosTest do
     assert log =~ "would call"
     assert log =~ "pane=\"w1:p1\""
     refute log =~ "private-value"
+
+    assert [%{type: "automation.output_watcher", outcome: :dry_run, payload: payload}] =
+             Jarvis2.Journal.recent(source: :automation)
+
+    assert payload == %{"pane" => "w1:p1"}
+    refute inspect(Jarvis2.Journal.recent()) =~ "private-value"
   end
 
   test "attention notifies once for a transition and clears on focus" do
@@ -86,6 +92,10 @@ defmodule Jarvis2.ScenariosTest do
     assert log =~ "notification.show"
     assert log =~ "client.window_title.set"
     assert log =~ "client.window_title.clear"
+
+    # One notification for the transition, none for the repeat.
+    assert [%{type: "automation.attention", payload: %{"pane" => "w1:p1", "state" => "blocked"}}] =
+             Jarvis2.Journal.recent(source: :automation)
   end
 
   test "explicitly enabled scenarios send only expected live requests" do

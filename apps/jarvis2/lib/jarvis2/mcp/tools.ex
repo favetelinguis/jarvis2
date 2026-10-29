@@ -164,21 +164,12 @@ defmodule Jarvis2.MCP.Tools do
         }
 
         socket = Application.get_env(:jarvis2, :herdr_socket, Socket)
-        expires_at = System.system_time(:millisecond) + params.ttl_ms
 
         case Actions.call(:sidebar_tokens, "pane.report_metadata", params,
                caller: pane,
                server: socket
              ) do
           {:ok, result} ->
-            Jarvis2.Scenarios.Restore.record_token(
-              "pane.report_metadata",
-              params,
-              pane,
-              view,
-              expires_at
-            )
-
             Phoenix.PubSub.local_broadcast(
               Jarvis2.PubSub,
               "mcp:status_reported",

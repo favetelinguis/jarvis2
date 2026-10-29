@@ -1,4 +1,4 @@
-defmodule Jarvis2.Scenarios.CustomWorker do
+defmodule Jarvis2.Automations.CustomWorker do
   @moduledoc "Best-effort Mix job status in the server's own Herdr pane."
   use GenServer
   require Logger
