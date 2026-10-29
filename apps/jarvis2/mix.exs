@@ -3,7 +3,7 @@ defmodule Jarvis2.MixProject do
 
   def project do
     [
-      app: :jarvis_web,
+      app: :jarvis2,
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -25,9 +25,8 @@ defmodule Jarvis2.MixProject do
 
   defp deps do
     [
-      {:jarvis_core, in_umbrella: true},
-      {:jarvis_mcp, in_umbrella: true},
-      {:jarvis_scenarios, in_umbrella: true},
+      {:herdr_client, in_umbrella: true},
+      {:phoenix_pubsub, "~> 2.1"},
       {:plug, "~> 1.16"},
       {:bandit, "~> 1.6"},
       {:jason, "~> 1.4"},

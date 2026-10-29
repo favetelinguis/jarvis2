@@ -36,4 +36,4 @@ Herdr serves one request per connection and resets concurrent ones that share it
 
 The supplied `.pi/mcp.json` applies only after Pi project trust is granted. It assumes the default port and token path; adjust it if `JARVIS2_PORT` or `JARVIS2_STATE_DIR` differs. Pi discovery and `whoami`/`log` calls from an isolated Herdr pane were tested with temporary Pi configuration and one-run trust approval; your project trust has not been changed. Agent identity is advisory and becomes `unknown` when the mirror is stale or the pane cannot be resolved.
 
-From the repository root, run `mix test`, `mix format --check-formatted`, and `mix credo` to check the project. Tests live under `apps/*/test`, with end-to-end tests in `apps/jarvis_web/test`. Credo currently reports existing code-quality findings.
+From the repository root, run `mix test`, `mix format --check-formatted`, and `mix credo` to check the project. Tests live under `apps/*/test`, with end-to-end tests in `apps/jarvis2/test`. Credo currently reports existing code-quality findings.

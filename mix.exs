@@ -4,9 +4,10 @@ defmodule Jarvis2.Umbrella.MixProject do
   def project do
     [
       apps_path: "apps",
+      apps: [:herdr_client, :jarvis2],
       version: "0.1.0",
       start_permanent: Mix.env() == :prod,
-      releases: [jarvis2: [applications: [jarvis_web: :permanent]]],
+      releases: [jarvis2: [applications: [jarvis2: :permanent]]],
       deps: deps()
     ]
   end
