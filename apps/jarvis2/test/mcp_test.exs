@@ -89,7 +89,7 @@ defmodule Jarvis2.MCPTest do
     assert Enum.all?(~w(ask_human request_approval wait_for_answer submit_result), &(&1 in names))
 
     assert Enum.all?(
-             ~w(whoami log blackboard_put blackboard_get blackboard_list list_agents get_layout list_worktrees report_status notify_human read_agent prompt_agent wait_for_event run_mix elixir_eval apply_layout),
+             ~w(whoami log blackboard_put blackboard_get blackboard_list list_agents get_layout list_worktrees report_status notify_human read_agent prompt_agent wait_for_event run_mix apply_layout),
              &(&1 in names)
            )
 
@@ -773,7 +773,7 @@ defmodule Jarvis2.MCPTest do
     assert result["output"] =~ "�"
   end
 
-  test "run_mix times out and eval is disabled unless explicitly enabled", ctx do
+  test "run_mix times out and the elixir_eval tool no longer exists", ctx do
     root = Path.join(Application.fetch_env!(:jarvis2, :state_dir), "timeout-project")
     File.mkdir_p!(root)
     executable = Path.join(root, "fake-mix")
@@ -782,31 +782,23 @@ defmodule Jarvis2.MCPTest do
     replace_config(:mix_project_dir, root)
     replace_config(:mix_executable, executable)
     replace_config(:mix_timeout_ms, 100)
-    replace_config(:allow_eval, false)
     {session, protocol} = initialize(ctx)
     headers = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]
     rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
     assert call_tool(ctx, headers, "run_mix", %{task: "compile"})["timed_out"] == true
 
-    {200, _, %{"result" => %{"isError" => true}}} =
-      rpc(ctx, headers, %{
-        jsonrpc: "2.0",
-        id: 14,
-        method: "tools/call",
-        params: %{name: "elixir_eval", arguments: %{code: "1 + 1"}}
-      })
+    assert {200, _, %{"error" => %{"data" => %{"message" => "Tool not found: elixir_eval"}}}} =
+             rpc(ctx, headers, %{
+               jsonrpc: "2.0",
+               id: 14,
+               method: "tools/call",
+               params: %{name: "elixir_eval", arguments: %{code: "1 + 1"}}
+             })
 
-    Application.put_env(:jarvis2, :allow_eval, true)
-    assert call_tool(ctx, headers, "elixir_eval", %{code: "1 + 1"})["result"] == "2"
-    replace_config(:eval_timeout_ms, 50)
+    {200, _, %{"result" => %{"tools" => tools}}} =
+      rpc(ctx, headers, %{jsonrpc: "2.0", id: 15, method: "tools/list"})
 
-    {200, _, %{"result" => %{"isError" => true}}} =
-      rpc(ctx, headers, %{
-        jsonrpc: "2.0",
-        id: 15,
-        method: "tools/call",
-        params: %{name: "elixir_eval", arguments: %{code: "Process.sleep(5000)"}}
-      })
+    refute "elixir_eval" in Enum.map(tools, & &1["name"])
   end
 
   defp replace_config(key, value) do

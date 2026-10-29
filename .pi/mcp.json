@@ -13,7 +13,6 @@
         "whoami": "direct",
         "report_status": "direct",
         "notify_human": "direct",
-        "elixir_eval": "hidden",
         "ask_human": "direct",
         "request_approval": "direct",
         "wait_for_answer": "direct",

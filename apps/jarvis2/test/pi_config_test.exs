@@ -11,6 +11,6 @@ defmodule Jarvis2.PiConfigTest do
     assert server["headers"]["X-Herdr-Pane"] == ~S(${HERDR_PANE_ID})
     assert server["headers"]["Authorization"] =~ "~/.local/state/jarvis2/token"
     assert server["toolExposure"]["whoami"] == "direct"
-    assert server["toolExposure"]["elixir_eval"] == "hidden"
+    refute Map.has_key?(server["toolExposure"], "elixir_eval")
   end
 end

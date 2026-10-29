@@ -3,7 +3,7 @@ defmodule Jarvis2.MCP.Tools do
   require Logger
   alias Jarvis2.{Fleet, Questions, Runs}
   alias Jarvis2.Herdr.{Actions, Client, Mirror, Socket}
-  alias Jarvis2.MCP.{Eval, EventWait, Identity, MixRunner}
+  alias Jarvis2.MCP.{EventWait, Identity, MixRunner}
 
   def call("whoami", _args, caller) do
     mode = if Application.get_env(:jarvis2, :live, false), do: "live", else: "dry"
@@ -254,7 +254,6 @@ defmodule Jarvis2.MCP.Tools do
     do: Fleet.apply_layout(value(args, :name), caller)
 
   def call("run_mix", args, _caller), do: MixRunner.run(value(args, :task), value(args, :project))
-  def call("elixir_eval", args, _caller), do: Eval.run(value(args, :code))
 
   def call("run_command", args, caller, progress) do
     Fleet.run_command(

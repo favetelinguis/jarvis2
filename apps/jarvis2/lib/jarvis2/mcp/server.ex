@@ -55,10 +55,7 @@ defmodule Jarvis2.MCP.Server do
      "Wait up to timeout_s seconds (default 30, max 100) for a ticket's answer.",
      %{ticket: {:required, :string}, timeout_s: :integer}},
     {"submit_result", "Finish your run with a summary and optional artifact paths or URLs.",
-     %{summary: {:required, :string}, artifacts: {:list, :string}}},
-    {"elixir_eval",
-     "Evaluate Elixir in this VM. Disabled unless explicitly enabled; not sandboxed.",
-     %{code: {:required, :string}}}
+     %{summary: {:required, :string}, artifacts: {:list, :string}}}
   ]
   # Tools that change something; refused when the caller's identity does not match its run.
   @write_tools ~w(report_status notify_human blackboard_put prompt_agent spawn_agent run_command apply_layout ask_human request_approval submit_result)
