@@ -12,7 +12,7 @@ defmodule Jarvis2.Web.Router do
   get "/status" do
     mirror = Application.get_env(:jarvis2, :mirror, Jarvis2.Herdr.Mirror)
     view = Jarvis2.Herdr.Mirror.get(mirror)
-    calls = Jarvis2.State.mcp_call_count()
+    calls = Jarvis2.Journal.count(source: :mcp)
 
     status =
       case view do

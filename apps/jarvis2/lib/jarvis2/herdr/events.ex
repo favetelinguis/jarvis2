@@ -73,7 +73,7 @@ defmodule Jarvis2.Herdr.Events do
 
       Logger.info("Herdr event source=socket type=#{inspect(name)} pane=#{inspect(pane)}")
 
-      Jarvis2.State.record_event(event)
+      Jarvis2.Journal.record(%{source: :herdr, type: name, payload: data})
 
       topic = "herdr:" <> name
       Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, topic, {:jarvis2, topic, event})

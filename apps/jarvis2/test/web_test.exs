@@ -1,5 +1,5 @@
 defmodule Jarvis2.WebTest do
-  use ExUnit.Case, async: false
+  use Jarvis2.DataCase, async: false
 
   setup_all do
     start_supervised!({Finch, name: Jarvis2.TestFinch})

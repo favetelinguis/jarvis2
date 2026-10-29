@@ -1,5 +1,5 @@
 defmodule Jarvis2.RepoTest do
-  use ExUnit.Case, async: false
+  use Jarvis2.DataCase, async: false
 
   test "opens the SQLite database inside the configured state directory" do
     assert Jarvis2.Repo.config()[:database] ==

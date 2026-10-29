@@ -32,9 +32,10 @@ defmodule Jarvis2.MCP.Tools do
     value = value(args, :value)
 
     if valid_key?(key) and byte_size(Jason.encode!(value)) <= 16_384 do
-      case Jarvis2.State.put(key, value) do
+      case Jarvis2.Blackboard.put(key, value) do
         :ok -> {:ok, %{ok: true}}
-        {:error, _} -> {:error, "blackboard is full"}
+        {:error, :full} -> {:error, "blackboard is full"}
+        {:error, :invalid} -> {:error, "invalid key or value is too large"}
       end
     else
       {:error, "invalid key or value is too large"}
@@ -42,13 +43,13 @@ defmodule Jarvis2.MCP.Tools do
   end
 
   def call("blackboard_get", args, _caller) do
-    case Jarvis2.State.get(value(args, :key)) do
+    case Jarvis2.Blackboard.get(value(args, :key)) do
       {:ok, result} -> {:ok, %{found: true, value: result}}
       :error -> {:ok, %{found: false}}
     end
   end
 
-  def call("blackboard_list", _args, _caller), do: {:ok, Jarvis2.State.list()}
+  def call("blackboard_list", _args, _caller), do: {:ok, Jarvis2.Blackboard.list()}
 
   def call("list_agents", args, _caller) do
     with {:ok, view} <- fresh_view() do
@@ -220,9 +221,9 @@ defmodule Jarvis2.MCP.Tools do
 
   def call(name, args, caller, _progress), do: call(name, args, caller)
 
-  def resource("jarvis2://blackboard"), do: Jarvis2.State.list()
-  def resource("jarvis2://events/recent"), do: Jarvis2.State.events()
-  def resource("jarvis2://journal"), do: Jarvis2.State.recent_journal()
+  def resource("jarvis2://blackboard"), do: Jarvis2.Blackboard.list()
+  def resource("jarvis2://events/recent"), do: journal(:herdr)
+  def resource("jarvis2://journal"), do: journal(:mcp)
   def resource("jarvis2://session"), do: view()
 
   def resource("jarvis2://layout") do
@@ -246,6 +247,9 @@ defmodule Jarvis2.MCP.Tools do
     mirror = view()
     %{worktrees: mirror.worktrees, errors: mirror.worktree_errors, stale: mirror.stale}
   end
+
+  defp journal(source),
+    do: [source: source] |> Jarvis2.Journal.recent() |> Enum.map(&Jarvis2.Journal.to_map/1)
 
   defp view, do: Mirror.get(Application.get_env(:jarvis2, :mirror, Mirror))
 

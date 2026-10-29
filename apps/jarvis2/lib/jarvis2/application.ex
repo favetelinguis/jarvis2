@@ -4,7 +4,7 @@ defmodule Jarvis2.Application do
 
   @impl true
   def start(_type, _args) do
-    children = Jarvis2.Core.child_specs() ++ [Jarvis2.Repo]
+    children = Jarvis2.Core.child_specs()
 
     children =
       if Application.get_env(:jarvis2, :scenarios, true) do

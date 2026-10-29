@@ -1,5 +1,5 @@
 defmodule Jarvis2.MCPTest do
-  use ExUnit.Case, async: false
+  use Jarvis2.DataCase, async: false
 
   defmodule FakeMirror do
     use GenServer
@@ -157,8 +157,8 @@ defmodule Jarvis2.MCPTest do
              layout_resource["layout_diff"]
 
     assert Enum.any?(
-             Jarvis2.State.recent_journal(),
-             &match?(%{tool: "whoami", caller: %{pane: "w1:p1"}}, &1)
+             Jarvis2.Journal.recent(source: :mcp),
+             &match?(%{type: "tool.whoami", payload: %{"caller" => %{"pane" => "w1:p1"}}}, &1)
            )
   end
 
@@ -183,8 +183,8 @@ defmodule Jarvis2.MCPTest do
       })
 
     assert Enum.any?(
-             Jarvis2.State.recent_journal(),
-             &match?(%{tool: "report_status", outcome: "error"}, &1)
+             Jarvis2.Journal.recent(source: :mcp),
+             &match?(%{type: "tool.report_status", outcome: :error}, &1)
            )
 
     {200, _, %{"error" => _}} =
@@ -196,8 +196,8 @@ defmodule Jarvis2.MCPTest do
       })
 
     assert Enum.any?(
-             Jarvis2.State.recent_journal(),
-             &match?(%{tool: "blackboard_put", outcome: "error"}, &1)
+             Jarvis2.Journal.recent(source: :mcp),
+             &match?(%{type: "tool.blackboard_put", outcome: :error}, &1)
            )
 
     {200, _, %{"result" => %{"isError" => true}}} =
@@ -240,7 +240,7 @@ defmodule Jarvis2.MCPTest do
     rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
     :ok = GenServer.call(ctx.mirror, :arm_stale)
     assert call_tool(ctx, headers, "whoami", %{})["pane"] == "w1:p1"
-    assert List.last(Jarvis2.State.recent_journal()).caller.pane == "w1:p1"
+    assert List.last(Jarvis2.Journal.recent(source: :mcp)).payload["caller"]["pane"] == "w1:p1"
   end
 
   test "missing, mismatched and stale identities never resolve to a pane", ctx do

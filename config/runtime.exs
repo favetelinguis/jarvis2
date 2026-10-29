@@ -12,7 +12,11 @@ if config_env() == :test do
     live: false,
     allow_eval: false
 
-  config :jarvis2, Jarvis2.Repo, database: Path.join(state_dir, "jarvis2.db"), pool_size: 1
+  config :jarvis2, Jarvis2.Repo,
+    database: Path.join(state_dir, "jarvis2.db"),
+    pool: Ecto.Adapters.SQL.Sandbox,
+    log: false,
+    pool_size: 2
 else
   port =
     case Integer.parse(System.get_env("JARVIS2_PORT", "4747")) do

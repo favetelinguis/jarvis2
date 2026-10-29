@@ -1,5 +1,5 @@
 defmodule Jarvis2.ExecutionTest do
-  use ExUnit.Case, async: false
+  use Jarvis2.DataCase, async: false
 
   defmodule Mirror do
     use GenServer
@@ -164,7 +164,7 @@ defmodule Jarvis2.ExecutionTest do
       end)
 
     refute log =~ "private-command"
-    refute inspect(Jarvis2.State.recent_journal()) =~ "private-command"
+    refute inspect(Jarvis2.Journal.recent()) =~ "private-command"
   end
 
   test "run_command emits request-scoped MCP progress", ctx do

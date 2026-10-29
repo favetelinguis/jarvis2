@@ -95,14 +95,20 @@ defmodule Jarvis2.MCP.Server do
         _ -> "error"
       end
 
-    entry = %{
-      tool: name,
-      caller: caller,
-      outcome: outcome,
-      timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-    }
+    args =
+      case request do
+        %{"params" => %{"arguments" => args}} when is_map(args) -> args
+        _ -> %{}
+      end
 
-    Jarvis2.State.journal(entry)
+    Jarvis2.Journal.record(%{
+      source: :mcp,
+      type: "tool." <> name,
+      outcome: String.to_existing_atom(outcome),
+      payload: %{caller: caller, args: args}
+    })
+
+    entry = %{tool: name, caller: caller, outcome: outcome}
 
     Phoenix.PubSub.local_broadcast(
       Jarvis2.PubSub,

@@ -1,5 +1,5 @@
 defmodule Jarvis2.HerdrEventsTest do
-  use ExUnit.Case, async: false
+  use Jarvis2.DataCase, async: false
 
   alias Jarvis2.Herdr.{Events, Mirror, Socket}
 
@@ -241,8 +241,8 @@ defmodule Jarvis2.HerdrEventsTest do
                    1_000
 
     assert Enum.any?(
-             Jarvis2.State.events(),
-             &match?(%{type: "pane.output_matched", delivery: "socket"}, &1)
+             Jarvis2.Journal.recent(source: :herdr),
+             &match?(%{type: "pane.output_matched", payload: %{"pane_id" => "w1:p1"}}, &1)
            )
   end
 

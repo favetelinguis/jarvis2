@@ -1,5 +1,5 @@
 defmodule Jarvis2.PromptAgentTest do
-  use ExUnit.Case, async: false
+  use Jarvis2.DataCase, async: false
 
   defmodule Mirror do
     use GenServer
@@ -147,7 +147,7 @@ defmodule Jarvis2.PromptAgentTest do
       end)
 
     refute log =~ "private task text"
-    refute inspect(Jarvis2.State.recent_journal()) =~ "private task text"
+    refute inspect(Jarvis2.Journal.recent()) =~ "private task text"
   end
 
   test "rejects indirect prompt cycles and missing or stale caller identity", ctx do
