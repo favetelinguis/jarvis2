@@ -23,6 +23,61 @@ defmodule Jarvis2Web.HarnessLiveTest do
     %{conn: sign_in(conn), path: Path.join(dir, "mcp.json")}
   end
 
+  test "configures valid role models without changing role files", %{conn: conn, path: path} do
+    roles = Path.join(Path.dirname(path), "roles")
+    File.mkdir_p!(roles)
+    old = Application.fetch_env!(:jarvis2, :roles_dir)
+    Application.put_env(:jarvis2, :roles_dir, roles)
+    on_exit(fn -> Application.put_env(:jarvis2, :roles_dir, old) end)
+
+    planner = Path.join(roles, "planner.md")
+    original = "---\nname: planner\nmodel: vendor/shipped\n---\nPlanner prompt"
+    File.write!(planner, original)
+    File.write!(Path.join(roles, "researcher.md"), "---\nname: researcher\n---\nResearch")
+    File.write!(Path.join(roles, "invalid.md"), "---\nname: invalid\nmodel: bad\n---\nBad")
+    {:ok, _} = Jarvis2.Settings.update(%{default_model: "vendor/default"})
+
+    {:ok, view, _} = live(conn, "/harness")
+    assert has_element?(view, "#role-model-planner input[value='vendor/shipped']")
+    assert has_element?(view, "#role-model-researcher input[value='vendor/default']")
+    assert has_element?(view, "#role-model-researcher", "Settings default")
+    assert has_element?(view, "#role-model-planner", "Role file default")
+    refute has_element?(view, "#role-model-invalid")
+
+    assert view |> form("#role-model-planner", model: "vendor/local") |> render_submit() =~
+             "saved"
+
+    assert File.read!(planner) == original
+    {:ok, view, _} = live(conn, "/harness")
+    assert has_element?(view, "#role-model-planner input[value='vendor/local']")
+    assert has_element?(view, "#role-model-planner", "Local override")
+
+    assert view |> form("#role-model-planner", model: "vendor/$(id)") |> render_submit() =~
+             "must look like provider/model"
+
+    {:ok, view, _} = live(conn, "/harness")
+    assert has_element?(view, "#role-model-planner input[value='vendor/local']")
+    File.write!(planner, String.replace(original, "vendor/shipped", "vendor/updated"))
+    assert view |> form("#role-model-planner", model: "") |> render_submit() =~ "saved"
+    assert has_element?(view, "#role-model-planner input[value='vendor/updated']")
+    assert File.read!(planner) == String.replace(original, "vendor/shipped", "vendor/updated")
+
+    assert view
+           |> form("#role-model-researcher", model: "vendor/local-research")
+           |> render_submit() =~ "saved"
+
+    assert view |> form("#role-model-researcher", model: "") |> render_submit() =~ "saved"
+    assert has_element?(view, "#role-model-researcher input[value='vendor/default']")
+
+    File.write!(
+      Path.join(roles, "new-role.md"),
+      "---\nname: new-role\nmodel: vendor/new\n---\nNew"
+    )
+
+    {:ok, view, _} = live(conn, "/harness")
+    assert has_element?(view, "#role-model-new-role input[value='vendor/new']")
+  end
+
   test "requires authentication" do
     conn = Phoenix.ConnTest.build_conn() |> Map.put(:host, "127.0.0.1")
     assert redirected_to(get(conn, "/harness")) == "/login"

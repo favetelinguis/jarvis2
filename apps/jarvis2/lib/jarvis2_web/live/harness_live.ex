@@ -1,7 +1,7 @@
 defmodule Jarvis2Web.HarnessLive do
   use Jarvis2Web, :live_view
 
-  alias Jarvis2.Harness
+  alias Jarvis2.{Harness, Roles, Settings}
 
   @impl true
   def mount(_params, _session, socket), do: {:ok, load(socket)}
@@ -18,10 +18,53 @@ defmodule Jarvis2Web.HarnessLive do
     end
   end
 
+  def handle_event("save_role_model", %{"role" => role, "model" => model}, socket) do
+    case Settings.save_role_model(role, model) do
+      {:ok, _} ->
+        {:noreply, socket |> load() |> put_flash(:info, "Role model saved.")}
+
+      {:error, :invalid_model} ->
+        {:noreply,
+         socket
+         |> load()
+         |> assign(:model_error, {role, "must look like provider/model"})
+         |> assign(:submitted_model, model)}
+
+      {:error, _} ->
+        {:noreply, socket |> load() |> put_flash(:error, "Cannot save role model.")}
+    end
+  end
+
+  def handle_event("save_role_model", _params, socket) do
+    {:noreply, socket |> load() |> put_flash(:error, "Cannot save role model.")}
+  end
+
   defp load(socket) do
+    settings = Settings.get()
+    overrides = Settings.role_models()
+
+    roles =
+      for {:ok, role} <- Roles.list() do
+        source =
+          cond do
+            Map.has_key?(overrides, role.name) -> "Local override"
+            role.model -> "Role file default"
+            true -> "Settings default"
+          end
+
+        %{
+          name: role.name,
+          model: Settings.effective_role_model(role, settings, overrides),
+          source: source
+        }
+      end
+
     socket
     |> assign(:path, Harness.pi_config_path())
     |> assign(:pi_status, Harness.pi_status())
+    |> assign(:roles, roles)
+    |> assign(:model_error, nil)
+    |> assign(:submitted_model, nil)
   end
 
   @impl true
@@ -63,6 +106,29 @@ defmodule Jarvis2Web.HarnessLive do
         be running. Pi may override global servers in trusted projects.
       </p>
     </fieldset>
+    <h2>Role models</h2>
+    <p>Save a local model for new runs, or clear the field to use the current default.</p>
+    <%= for role <- @roles do %>
+      <form id={"role-model-#{role.name}"} phx-submit="save_role_model">
+        <input type="hidden" name="role" value={role.name} />
+        <label for={"model-#{role.name}"}>{role.name} model</label>
+        <input
+          id={"model-#{role.name}"}
+          name="model"
+          value={
+            if @model_error && elem(@model_error, 0) == role.name,
+              do: @submitted_model,
+              else: role.model
+          }
+          aria-invalid={@model_error && elem(@model_error, 0) == role.name}
+        />
+        <span class="muted">{role.source}</span>
+        <button type="submit">Save</button>
+        <%= if @model_error && elem(@model_error, 0) == role.name do %>
+          <p class="flash-error">Model {elem(@model_error, 1)}</p>
+        <% end %>
+      </form>
+    <% end %>
     """
   end
 end

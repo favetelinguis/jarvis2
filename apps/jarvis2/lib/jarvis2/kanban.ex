@@ -813,7 +813,7 @@ defmodule Jarvis2.Kanban do
       worktree: card.worktree,
       task: task,
       role: role.name,
-      model: role.model,
+      model: Jarvis2.Settings.role_model(role),
       thinking: role.effort,
       session_id: session_id(card, restored),
       parent_run_id: parent_run_id

@@ -120,7 +120,7 @@ defmodule Jarvis2.Subagents do
       name: role.name,
       role: role.name,
       kind: "pi",
-      model: role.model,
+      model: Jarvis2.Settings.role_model(role),
       thinking: role.effort,
       cwd: parent.cwd,
       worktree: parent.worktree,

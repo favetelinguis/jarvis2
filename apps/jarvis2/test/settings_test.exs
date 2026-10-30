@@ -91,6 +91,106 @@ defmodule Jarvis2.SettingsTest do
     assert Settings.get().scenarios == []
   end
 
+  test "role overrides validate, remain independent, and follow changing fallbacks" do
+    dir = Path.join(System.tmp_dir!(), "jarvis2-roles-#{Ecto.UUID.generate()}")
+    File.mkdir_p!(dir)
+    old = Application.fetch_env!(:jarvis2, :roles_dir)
+    Application.put_env(:jarvis2, :roles_dir, dir)
+
+    on_exit(fn ->
+      Application.put_env(:jarvis2, :roles_dir, old)
+      File.rm_rf!(dir)
+    end)
+
+    file = Path.join(dir, "planner.md")
+    File.write!(file, "---\nname: planner\nmodel: vendor/file\n---\nPlan")
+    File.write!(Path.join(dir, "other.md"), "---\nname: other\n---\nOther")
+    {:ok, planner} = Jarvis2.Roles.get("planner")
+    {:ok, other} = Jarvis2.Roles.get("other")
+    {:ok, _} = Settings.update(%{default_model: "vendor/default"})
+    assert Settings.role_model(planner) == "vendor/file"
+    assert Settings.role_model(other) == "vendor/default"
+    assert {:ok, _} = Settings.save_role_model("planner", "vendor/local")
+    assert {:ok, _} = Settings.save_role_model("other", "vendor/other")
+    assert {:error, :invalid_model} = Settings.save_role_model("planner", "vendor/$(id)")
+    assert {:error, :invalid_role} = Settings.save_role_model("missing", "vendor/local")
+    assert Settings.role_model(planner) == "vendor/local"
+    assert Settings.role_model(other) == "vendor/other"
+
+    File.write!(file, "---\nname: planner\nmodel: vendor/new\n---\nPlan")
+    {:ok, changed} = Jarvis2.Roles.get("planner")
+    assert Settings.role_model(changed) == "vendor/local"
+    assert {:ok, _} = Settings.save_role_model("planner", " ")
+    assert Settings.role_model(changed) == "vendor/new"
+    assert {:ok, _} = Settings.save_role_model("other", "")
+    assert Settings.role_model(other) == "vendor/default"
+
+    assert {:ok, _} = Settings.save_role_model("planner", "vendor/stale")
+    File.rm!(file)
+    assert {:error, :invalid_role} = Settings.save_role_model("planner", "")
+    assert Settings.role_models()["planner"] == "vendor/stale"
+    assert Settings.role_model(other) == "vendor/default"
+  end
+
+  test "role models remain local to each database and survive a repository restart" do
+    dir = Path.join(System.tmp_dir!(), "jarvis2-installations-#{Ecto.UUID.generate()}")
+    File.mkdir_p!(dir)
+    old = Application.fetch_env!(:jarvis2, :roles_dir)
+    Application.put_env(:jarvis2, :roles_dir, dir)
+
+    on_exit(fn ->
+      Application.put_env(:jarvis2, :roles_dir, old)
+      File.rm_rf!(dir)
+    end)
+
+    File.write!(Path.join(dir, "planner.md"), "---\nname: planner\nmodel: vendor/file\n---\nPlan")
+    {:ok, role} = Jarvis2.Roles.get("planner")
+    first = Path.join(dir, "first.db")
+    second = Path.join(dir, "second.db")
+
+    with_database(first, true, fn ->
+      assert {:ok, _} = Settings.save_role_model("planner", "vendor/first")
+    end)
+
+    with_database(second, true, fn ->
+      assert Settings.role_model(role) == "vendor/file"
+      assert {:ok, _} = Settings.save_role_model("planner", "vendor/second")
+      assert Settings.role_model(role) == "vendor/second"
+    end)
+
+    with_database(first, false, fn ->
+      assert Settings.role_model(role) == "vendor/first"
+    end)
+
+    with_database(second, false, fn ->
+      assert Settings.role_model(role) == "vendor/second"
+    end)
+  end
+
+  defp with_database(path, migrate?, fun) do
+    {:ok, pid} =
+      Repo.start_link(name: nil, database: path, pool: DBConnection.ConnectionPool, pool_size: 1)
+
+    previous = Repo.put_dynamic_repo(pid)
+
+    try do
+      if migrate? do
+        migration = Jarvis2.Repo.Migrations.CreateRoleModels
+
+        path =
+          Path.expand("../priv/repo/migrations/20260101000021_create_role_models.exs", __DIR__)
+
+        unless Code.ensure_loaded?(migration), do: Code.require_file(path)
+        Ecto.Migrator.run(Repo, [{20_260_101_000_021, migration}], :up, all: true, log: false)
+      end
+
+      fun.()
+    after
+      Repo.put_dynamic_repo(previous)
+      GenServer.stop(pid)
+    end
+  end
+
   test "new runs pick up the configured defaults" do
     {:ok, _} =
       Settings.update(%{

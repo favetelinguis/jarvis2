@@ -1,12 +1,15 @@
 defmodule Jarvis2.Settings do
   @moduledoc """
-  User configuration, stored as a single row: which automations and agent actions are enabled and
-  the defaults for new runs.
+  User configuration: enabled automations and agent actions, defaults for new runs,
+  and local model overrides for roles.
 
   `JARVIS2_SCENARIOS` can lock the set that may ever be enabled; the database can only narrow it.
   """
-  alias Jarvis2.Repo
-  alias Jarvis2.Settings.Setting
+  import Ecto.Query, only: [from: 2]
+
+  alias Jarvis2.{Repo, Roles}
+  alias Jarvis2.Runs.Run
+  alias Jarvis2.Settings.{RoleModel, Setting}
 
   @scenarios %{
     "attention" => "Notify when an agent is blocked or done",
@@ -37,6 +40,46 @@ defmodule Jarvis2.Settings do
     with {:ok, setting} <- get() |> change(attrs) |> Repo.update() do
       apply_settings(setting)
       {:ok, setting}
+    end
+  end
+
+  @doc "All saved role model overrides, including those for roles no longer present."
+  def role_models do
+    Map.new(Repo.all(RoleModel), &{&1.role, &1.model})
+  end
+
+  @doc "The model used for a new run of this role."
+  def role_model(%Roles.Role{} = role) do
+    override = Repo.get(RoleModel, role.name)
+    if override, do: override.model, else: role.model || get().default_model
+  end
+
+  def effective_role_model(%Roles.Role{} = role, %Setting{} = setting, overrides) do
+    overrides[role.name] || role.model || setting.default_model
+  end
+
+  @doc "Save or clear the model override for a currently valid role."
+  def save_role_model(name, model) do
+    case Roles.get(name) do
+      {:ok, _role} -> persist_role_model(name, model)
+      {:error, _} -> {:error, :invalid_role}
+    end
+  end
+
+  defp persist_role_model(name, model) do
+    cond do
+      is_binary(model) and String.valid?(model) and String.trim(model) == "" ->
+        Repo.delete_all(from(r in RoleModel, where: r.role == ^name))
+        {:ok, :cleared}
+
+      Run.valid_model?(model) ->
+        Repo.insert(%RoleModel{role: name, model: model},
+          on_conflict: {:replace, [:model]},
+          conflict_target: :role
+        )
+
+      true ->
+        {:error, :invalid_model}
     end
   end
 

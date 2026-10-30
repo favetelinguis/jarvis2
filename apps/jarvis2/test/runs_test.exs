@@ -138,6 +138,32 @@ defmodule Jarvis2.RunsTest do
     assert_eventually(fn -> Runs.get_run(card.run_id).status == :working end)
   end
 
+  test "new card runs use the current role override and preserve earlier run models", ctx do
+    roles = Path.join(ctx.cwd, "roles")
+    File.mkdir_p!(roles)
+    file = Path.join(roles, "planner.md")
+    File.write!(file, "---\nname: planner\nmodel: vendor/file\n---\nPlan")
+    config(:roles_dir, roles)
+    assert {:ok, _} = Jarvis2.Settings.save_role_model("planner", "vendor/local")
+
+    {:ok, first} = Jarvis2.Kanban.create_card(%{title: "First", cwd: ctx.cwd})
+    assert {:ok, first} = Jarvis2.Kanban.move(first, :agent)
+    assert first.run.model == "vendor/local"
+    assert_receive {:request, "agent.start", %{"args" => args}}, 3_000
+    assert Enum.join(args, " ") =~ "--provider vendor --model local"
+    assert_eventually(fn -> Runs.get_run(first.run_id).status == :working end)
+
+    assert {:ok, _} = Jarvis2.Settings.save_role_model("planner", "")
+    File.write!(file, "---\nname: planner\nmodel: vendor/updated\n---\nPlan")
+    {:ok, second} = Jarvis2.Kanban.create_card(%{title: "Second", cwd: ctx.cwd})
+    assert {:ok, second} = Jarvis2.Kanban.move(second, :agent)
+    assert second.run.model == "vendor/updated"
+    assert Runs.get_run(first.run_id).model == "vendor/local"
+    assert_receive {:request, "agent.prompt", _}, 8_000
+    assert_receive {:request, "agent.prompt", _}, 8_000
+    assert_eventually(fn -> Runs.get_run(second.run_id).status == :working end)
+  end
+
   test "agents file launch fingerprints the resolved worktree before agent.start", ctx do
     checkout = Path.join(ctx.cwd, "checkout")
     File.mkdir_p!(checkout)
@@ -222,6 +248,7 @@ defmodule Jarvis2.RunsTest do
     assert started.run.task =~ "Custom role"
     assert_eventually(fn -> Runs.get_run(started.run_id).status == :working end)
     drain_requests()
+    assert {:ok, _} = Jarvis2.Settings.save_role_model("planner", "vendor/local")
 
     for content <- [
           "---\nname: planner\nmodel: invalid;bad\n---\nbody",
@@ -597,6 +624,7 @@ defmodule Jarvis2.RunsTest do
     )
 
     config(:roles_dir, roles)
+    assert {:ok, _} = Jarvis2.Settings.save_role_model("fix", "vendor/local-review")
     parent = working_run(ctx) |> Run.progress_changeset(%{tab_id: "w1:t2"}) |> Repo.update!()
     parent = parent |> Run.changeset(%{worktree: "feature"}) |> Repo.update!()
 
@@ -658,7 +686,10 @@ defmodule Jarvis2.RunsTest do
     assert child.spawned_by_run_id == parent.id
 
     assert {child.cwd, child.worktree, child.role, child.model, child.thinking} ==
-             {parent.cwd, parent.worktree, "fix", "vendor/review", "medium"}
+             {parent.cwd, parent.worktree, "fix", "vendor/local-review", "medium"}
+
+    assert_receive {:request, "agent.start", %{"args" => args}}, 3_000
+    assert Enum.join(args, " ") =~ "--provider vendor --model local-review"
 
     assert {:error, _} = Jarvis2.Subagents.spawn(id, "fix", "nested")
     assert {:error, "no such subagent"} = Jarvis2.Subagents.wait(id, Ecto.UUID.generate(), 1)

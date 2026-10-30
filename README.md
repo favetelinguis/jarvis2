@@ -37,8 +37,8 @@ A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bi
 
 1. Start with `mix run --no-halt` and sign in.
 2. On **Kanban**, add a card with an idea, then drag it to **Agent**. The default agent is Pi; the
-   step role selects model and thinking (the shipped roles use `openrouter/openai/gpt-6-luna` and `low`).
-   Settings provide fallbacks when the role omits either value.
+   step role selects model and thinking. Harness can override each role's model locally; Settings
+   provide fallbacks when the role omits either value.
 3. Jarvis2 creates a tab in the card's project workspace (or its worktree's workspace), starts Pi with a Jarvis2 MCP extension,
    and delivers the card. Answer card questions on the board and other questions in **Inbox**.
    When finished, archive the card to close its tab; restore it with a reason to reload its Pi session.
@@ -177,8 +177,10 @@ Role instructions go here.
 ```
 
 The name must match the filename stem, use lowercase letters, digits and single hyphens, and be at
-most 64 bytes. Model and effort are optional; Settings supplies omitted values. Effort is one of
-`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Unknown frontmatter keys are ignored.
+most 64 bytes. Model and effort are optional; Settings supplies omitted values. On `/harness`, save
+local model overrides for new card and subagent runs without changing role files; clear a field and
+save to revert to the current role-file or Settings default. Existing runs retain their model.
+Effort is one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Unknown frontmatter keys are ignored.
 Jarvis2 appends one shared "Working with the human" section (questions, results, skill reports) to every role prompt, so role files hold only the job, its restrictions and which skills to load, in order. Domain detail lives in `skills/<name>/SKILL.md`.
 The `fix` role is opted into subagent spawning with `subagent: true`; other roles are not eligible by default.
 Role instructions govern the agent's job and any restrictions; they are not a sandbox. Missing or
