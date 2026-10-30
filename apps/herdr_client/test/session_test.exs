@@ -50,6 +50,19 @@ defmodule Jarvis2.Herdr.SessionTest do
     assert length(String.split(log, "session list --json")) >= 3
   end
 
+  test "starts a session without Linux-specific setsid", ctx do
+    for name <- ~w(sh nohup cat) do
+      File.ln_s!(System.find_executable(name), Path.join(ctx.dir, name))
+    end
+
+    previous = System.get_env("PATH")
+    System.put_env("PATH", ctx.dir)
+    on_exit(fn -> System.put_env("PATH", previous) end)
+
+    assert {:ok, ctx.socket} ==
+             Session.ensure("jarvis2", herdr: ctx.executable, timeout: 1_000, poll_interval: 10)
+  end
+
   test "starts a stopped session", ctx do
     File.write!(ctx.state, "false")
 

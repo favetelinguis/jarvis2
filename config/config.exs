@@ -7,7 +7,8 @@ config :jarvis2,
   live_scenarios: [],
   ecto_repos: [Jarvis2.Repo],
   roles_dir: Path.expand("../roles", __DIR__),
-  skills_dir: Path.expand("../skills", __DIR__)
+  skills_dir: Path.expand("../skills", __DIR__),
+  pi_extension: Path.expand("../.pi/jarvis2-run.js", __DIR__)
 
 config :jarvis2, Jarvis2Web.Endpoint,
   adapter: Bandit.PhoenixAdapter,

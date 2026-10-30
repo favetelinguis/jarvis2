@@ -28,10 +28,21 @@ Watch the session with `herdr session attach jarvis2`.
 | `JARVIS2_PORT`      | HTTP port on `127.0.0.1` (default `4747`)                                  |
 | `JARVIS2_STATE_DIR` | token, cookie secret and `jarvis2.db` (default `~/.local/state/jarvis2`)   |
 | `JARVIS2_SCENARIOS` | optional comma-separated lock-down of the actions that may ever be enabled |
-| `JARVIS2_ROLES_DIR` | role Markdown directory (default: umbrella root `roles/`) |
-| `JARVIS2_SKILLS_DIR` | Pi run skills directory (default: umbrella root `skills/`) |
+| `JARVIS2_ROLES_DIR` | role Markdown directory (default: bundled roles in a release, otherwise umbrella root `roles/`) |
+| `JARVIS2_SKILLS_DIR` | Pi run skills directory (default: bundled skills in a release, otherwise umbrella root `skills/`) |
 
-A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bin/jarvis2 start`.
+### Releases
+
+Download the matching Linux or macOS archive from [GitHub Releases](https://github.com/favetelinguis/jarvis2/releases),
+extract it and run `bin/jarvis2 start`. Alternatively install with `mise use -g github:favetelinguis/jarvis2`,
+then run `jarvis2 start`. The release bundles Erlang, roles, skills and the Pi extension; Herdr and Pi must
+still be installed separately and available on PATH. `run_mix` additionally requires Mix and GNU `timeout`
+(on macOS, install GNU coreutils and make `timeout` available on PATH).
+
+To build locally: `MIX_ENV=prod mix release`, then `_build/prod/rel/jarvis2/bin/jarvis2 start`.
+Pushing a `v`-prefixed version tag builds native x86-64 and ARM64 archives for Linux and macOS; GitHub
+publishes the release only after all four builds and smoke checks succeed. Linux archives require a compatible
+glibc-based distribution (built on Ubuntu 24.04).
 
 ## The showcase: a Pi agent on `openrouter/openai/gpt-6-luna`
 
@@ -46,9 +57,9 @@ A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bi
 `MODEL=luna scripts/live-tour.sh` sets up an isolated Herdr session for a manual showcase
 (it uses your real Pi configuration and OpenRouter credits).
 
-Pi runs explicitly load `.pi/jarvis2-run.js`, which registers the `jarvis2_run` MCP server using the
-run's URL and Herdr pane headers, regardless of the run's working directory. Its path is temporarily
-hardcoded to `/home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js`. Pi runs advertise only skills
+Pi runs explicitly load the bundled `jarvis2-run.js` extension (or `.pi/jarvis2-run.js` in a source checkout),
+which registers the `jarvis2_run` MCP server using the run's URL and Herdr pane headers, regardless of the
+run's working directory. Pi runs advertise only skills
 from `JARVIS2_SKILLS_DIR`, not skills discovered from the host or the run workspace. Skill instructions
 are loaded on demand. Manual Pi sessions use the separate board integration below.
 

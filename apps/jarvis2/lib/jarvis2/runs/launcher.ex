@@ -9,7 +9,6 @@ defmodule Jarvis2.Runs.Launcher do
   alias Jarvis2.Herdr.{Actions, ExecutionGuard, Mirror, Socket, Workspaces}
   alias Jarvis2.Runs.Run
 
-  @pi_extension "/home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js"
   @ui %{system: "ui", pane: "system:ui"}
   @prompt_wait_ms 15_000
   @retryable ~w(target_unavailable target_not_ready caller_or_mirror_unavailable target_busy rate_limited)
@@ -36,7 +35,7 @@ defmodule Jarvis2.Runs.Launcher do
       "--thinking",
       thinking,
       "--extension",
-      @pi_extension,
+      Application.fetch_env!(:jarvis2, :pi_extension),
       "--no-skills",
       "--skill",
       Application.fetch_env!(:jarvis2, :skills_dir)

@@ -5,7 +5,7 @@ defmodule Jarvis2.Herdr.Session do
                  ~w(HERDR_SOCKET_PATH HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID),
                  &{&1, nil}
                )
-  @server_command ~S(exec setsid "$1" --session "$2" server >/dev/null 2>&1 &)
+  @server_command ~S(nohup "$1" --session "$2" server </dev/null >/dev/null 2>&1 &)
 
   @doc "Returns the socket path for a running named session, starting it if necessary."
   def ensure(name, opts \\ []) do

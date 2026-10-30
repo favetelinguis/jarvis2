@@ -1,5 +1,11 @@
 import Config
 
+if release_root = System.get_env("RELEASE_ROOT") do
+  share = Path.join(release_root, "share")
+  config :jarvis2, roles_dir: Path.join(share, "roles"), skills_dir: Path.join(share, "skills")
+  config :jarvis2, :pi_extension, Path.join(share, "jarvis2-run.js")
+end
+
 if roles_dir = System.get_env("JARVIS2_ROLES_DIR") do
   config :jarvis2, :roles_dir, Path.expand(roles_dir)
 end
