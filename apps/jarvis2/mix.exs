@@ -41,6 +41,7 @@ defmodule Jarvis2.MixProject do
       {:plug, "~> 1.16"},
       {:bandit, "~> 1.6"},
       {:jason, "~> 1.4"},
+      {:yaml_elixir, "~> 2.12"},
       {:anubis_mcp, "~> 2.2"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]

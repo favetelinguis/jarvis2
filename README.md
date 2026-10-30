@@ -28,14 +28,16 @@ Watch the session with `herdr session attach jarvis2`.
 | `JARVIS2_PORT`      | HTTP port on `127.0.0.1` (default `4747`)                                  |
 | `JARVIS2_STATE_DIR` | token, cookie secret and `jarvis2.db` (default `~/.local/state/jarvis2`)   |
 | `JARVIS2_SCENARIOS` | optional comma-separated lock-down of the actions that may ever be enabled |
+| `JARVIS2_ROLES_DIR` | role Markdown directory (default: umbrella root `roles/`) |
 
 A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bin/jarvis2 start`.
 
 ## The showcase: a Pi agent on `openrouter/openai/gpt-6-luna`
 
 1. Start with `mix run --no-halt` and sign in.
-2. On **Kanban**, add a card with an idea, then drag it to **Agent**. The default agent is Pi,
-   model `openrouter/openai/gpt-6-luna`, thinking `low`.
+2. On **Kanban**, add a card with an idea, then drag it to **Agent**. The default agent is Pi; the
+   step role selects model and thinking (the shipped roles use `openrouter/openai/gpt-6-luna` and `low`).
+   Settings provide fallbacks when the role omits either value.
 3. Jarvis2 creates a tab in the card's project workspace (or its worktree's workspace), starts Pi with a Jarvis2 MCP extension,
    and delivers the card. Answer card questions on the board and other questions in **Inbox**.
    When finished, archive the card to close its tab; restore it with a reason to reload its Pi session.
@@ -58,6 +60,7 @@ repository's `.pi/mcp.json` after project trust, or add its `jarvis2` entry to `
 | `/blackboard`                     | Notes shared between agents and you (JSON values)                                                                                     |
 | `/events`                         | The journal, filterable by source, type prefix and run                                                                                |
 | `/settings` | Which actions are enabled and defaults for new card agents |
+| `/roles` | Assign roles to card steps and inspect role files |
 
 Every page except `/login`, `/healthz`, `/status` and `/mcp` needs a session.
 
@@ -77,7 +80,7 @@ or is agent-only:
 | `run_mix` | job data in the `runs` table; calls appear in `/events` |
 | `ask_human`, `request_approval`, `wait_for_answer` | `/inbox` and `/events` (run pane only) |
 | `submit_result` | agent-only; calls appear in `/events` (run pane only) |
-| `ask_questions`, `submit_deliverable`             | kanban card (kanban run pane only)                                    |
+| `ask_questions`, `submit_deliverable`, `report_skill` | kanban card (kanban run pane only)                                |
 
 Resources: `jarvis2://session`, `layout` and `worktrees` (dashboard), `events/recent` and `journal`
 (`/events`), `blackboard` (`/blackboard`). `jarvis2://layout` includes the net layout diff (membership,
@@ -85,8 +88,10 @@ focus, geometry, split ratios, agent state; limited to 64 changes, `resynced` af
 `unavailable` when invalid or oversized). Browser-origin requests to `/mcp` are rejected.
 
 Only the board UI moves cards into or out of Archive; MCP has no archive or restore tool. Restore
-prompts include the reason and bounded card context; exceptionally long ideas may be truncated to
-fit the task limit. If the saved Pi session is missing, Pi starts a fresh session with that context.
+prompts preserve the reason, idea and role instructions; optional history and prior deliverables may
+be truncated. The entire agent prompt is limited to 65,536 bytes. If
+mandatory content does not fit, the step is refused. If the saved Pi session is missing, Pi starts a
+fresh session with that context.
 
 Plan cards have Planning and Implementation stages. Once a plan is Done, **Accept plan** overwrites
 `PLAN.md` in the planner run's checkout (the chosen worktree, if any) and starts a new implementer pane in the same tab (or a new
@@ -105,6 +110,32 @@ moving their card to Scratch and back to Agent.
 `ask_human` and `request_approval` return a ticket immediately; the agent polls `wait_for_answer(ticket,
 timeout_s ≤ 100)` until it is no longer `pending`. Questions expire after an hour and are cancelled on
 result submission or when the run stops, fails or is lost; a run may have five open at a time.
+
+## Roles
+
+Each step maps to a role on `/roles`. Role files are re-read on each new step; a resumed live agent
+keeps its existing role. New runs show the role as the pane label and Herdr agent display name; the
+underlying agent name remains unique. To edit a role, change its Markdown file in `roles/` (or
+`JARVIS2_ROLES_DIR`):
+
+```markdown
+---
+name: planner
+description: Turns ideas into plans.
+model: openrouter/openai/gpt-6-luna
+effort: low
+---
+Role instructions go here.
+```
+
+The name must match the filename stem, use lowercase letters, digits and single hyphens, and be at
+most 64 bytes. Model and effort are optional; Settings supplies omitted values. Effort is one of
+`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Unknown frontmatter keys are ignored.
+Role instructions govern the agent's job and any restrictions; they are not a sandbox. Missing or
+invalid mapped roles prevent a new step from starting. Agents report loaded skills with `report_skill`;
+the card shows these self-reports by stage, including across reopen and restore. A skill that an agent
+fails to report is not visible. Pi runs also receive the bundled `jarvis2-slide-deck` skill so it is
+available in any working directory.
 
 ## Safety model
 
@@ -127,6 +158,8 @@ result submission or when the run stops, fails or is lost; a run may have five o
   downloads contain a CSP meta and are checked for common external references. The check is not a security
   boundary: a downloaded file runs scripts outside the preview sandbox and can navigate to remote sites. Review
   decks before sharing or opening them, especially on a networked machine.
+- **Role files are trusted.** Role prompts are not sandboxed and can instruct an agent to make real
+  changes. The model identifier is validated because it reaches a shell command line.
 - **Redaction.** Prompt, command and summary text, blackboard values and matched output lines are never stored in
   the journal (only their sizes); credential-looking keys and bearer strings are masked.
 
@@ -150,7 +183,7 @@ Enabled from Settings, each records `automation.*` rows in the journal:
   secrets printed by tests.
 - `output_watcher`: notification when watched pane output matches.
 - `sidebar_tokens` / `pane_hygiene`: `$agent_state` and `$last_tool` sidebar tokens (60 s TTL) and
-  pane/tab renaming, which can overwrite manual labels; see `examples/herdr-config.snippet.toml`.
+  pane/tab renaming, which can overwrite manual labels (role-labelled run panes are preserved); see `examples/herdr-config.snippet.toml`.
   The shared Herdr configuration also applies when you attach to `jarvis2`.
 - `custom_worker`: shows a running `run_mix` job on the server's own pane, if it is in the dedicated session.
 

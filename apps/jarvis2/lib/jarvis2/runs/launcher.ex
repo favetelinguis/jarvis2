@@ -33,7 +33,9 @@ defmodule Jarvis2.Runs.Launcher do
       "--thinking",
       thinking,
       "--extension",
-      @pi_extension
+      @pi_extension,
+      "--skill",
+      Path.join([:code.priv_dir(:jarvis2), "skills", "jarvis2-slide-deck"])
     ] ++ if(session_id, do: ["--session-id", session_id], else: [])
   end
 
@@ -43,6 +45,14 @@ defmodule Jarvis2.Runs.Launcher do
   def start(%Run{} = run, label \\ nil, placement \\ :tab) do
     guard = Application.get_env(:jarvis2, :execution_guard, ExecutionGuard)
 
+    if Actions.valid_prompt_text?(Jarvis2.Runs.Prompt.build(run)) do
+      reserve_and_start(run, label, placement, guard)
+    else
+      {:error, "The complete run prompt is invalid or exceeds 65536 bytes."}
+    end
+  end
+
+  defp reserve_and_start(run, label, placement, guard) do
     case ExecutionGuard.reserve(caller(run), guard) do
       {:ok, _verified, lease} ->
         result = guarded(fn -> execute(run, label, placement) end)
@@ -141,9 +151,12 @@ defmodule Jarvis2.Runs.Launcher do
          {:ok, workspace} <- Workspaces.resolve(run.cwd, run.worktree),
          run = %{run | cwd: workspace.checkout_path},
          {:ok, pane, tab_id} <- create_pane(run, view, workspace.workspace_id, label, placement),
+         :ok <- rename_role(pane, run.role),
          :ok <- close_fresh_tabs(workspace.fresh_tab_ids),
          :ok <- shell_ready(pane),
          {:ok, _agent} <- start_agent(run, pane) do
+      display_role(pane, run)
+
       {:ok,
        %{
          tab_id: tab_id,
@@ -155,6 +168,37 @@ defmodule Jarvis2.Runs.Launcher do
          prompt: send_task(run, pane)
        }}
     end
+  end
+
+  defp rename_role(_pane, nil), do: :ok
+
+  defp rename_role(pane, role) do
+    result =
+      Socket.request("pane.rename", %{pane_id: pane["pane_id"], label: role}, server: socket())
+
+    Logger.info("Herdr live run pane.rename outcome=#{outcome(result)}")
+    if match?({:error, _}, result), do: Logger.warning("Could not label run pane")
+    :ok
+  end
+
+  defp display_role(_pane, %Run{role: nil}), do: :ok
+
+  defp display_role(pane, %Run{role: role, kind: kind}) do
+    result =
+      Socket.request(
+        "pane.report_metadata",
+        %{
+          pane_id: pane["pane_id"],
+          source: "custom:jarvis2-role",
+          agent: kind,
+          display_agent: role
+        },
+        server: socket()
+      )
+
+    Logger.info("Herdr live run pane.report_metadata outcome=#{outcome(result)}")
+    if match?({:error, _}, result), do: Logger.warning("Could not set run role display name")
+    :ok
   end
 
   defp close_fresh_tabs(tabs) do

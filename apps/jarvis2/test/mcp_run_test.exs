@@ -122,6 +122,41 @@ defmodule Jarvis2.MCPRunTest do
         ] do
       assert {:error, "no run for this pane"} = call_error(ctx, session, tool, args)
     end
+
+    assert {:error, "Not a kanban run."} =
+             call_error(ctx, session, "report_skill", %{name: "x", reason: "x"})
+  end
+
+  test "report_skill records valid reports for kanban runs and enforces limits", ctx do
+    session = start_session(ctx, ctx.pane)
+
+    assert {:error, "Not a kanban run."} =
+             call_error(ctx, session, "report_skill", %{name: "review", reason: "Review changes"})
+
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Idea", cwd: File.cwd!()})
+    card |> Ecto.Changeset.change(column: :agent, run_id: ctx.run.id) |> Repo.update!()
+
+    assert {:error, _} = call_error(ctx, session, "report_skill", %{name: " ", reason: "ok"})
+
+    assert {:error, _} =
+             call_error(ctx, session, "report_skill", %{
+               name: "skill",
+               reason: String.duplicate("é", 251)
+             })
+
+    for n <- 1..50 do
+      assert %{"status" => "recorded"} =
+               call(ctx, session, "report_skill", %{name: "skill-#{n}", reason: "needed"})
+    end
+
+    assert {:error, _} =
+             call_error(ctx, session, "report_skill", %{name: "extra", reason: "loop"})
+
+    uses = Jarvis2.Kanban.get_card(card.id).skill_uses
+    assert length(uses) == 50
+    assert Enum.all?(uses, &(&1.stage == :planning and &1.run_id == ctx.run.id))
+    assert Jarvis2.Kanban.get_card(card.id).column == :agent
+    refute inspect(Journal.recent(type: "tool.report_skill")) =~ "needed"
   end
 
   test "submit_result keeps the pane usable until the run is stopped", ctx do

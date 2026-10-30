@@ -165,7 +165,9 @@ defmodule Jarvis2.Automations.Presentation do
       pane = Enum.find(view.snapshot["panes"], &(&1["pane_id"] == entry.pane))
       label = clean(entry.kind, 32)
 
-      if label != "" and pane["label"] != label do
+      role_run? = role_pane?(entry.pane, agent)
+
+      if not role_run? and label != "" and pane["label"] != label do
         write(
           :pane_hygiene,
           "pane.rename",
@@ -178,6 +180,24 @@ defmodule Jarvis2.Automations.Presentation do
       rename_tab(view, pane, entry.pane, socket)
     end
   end
+
+  # Agent detection can arrive before launch has stored the newly-created pane on the run.
+  defp role_pane?(pane, agent) do
+    match?(
+      %Jarvis2.Runs.Run{role: role} when not is_nil(role),
+      Jarvis2.Runs.get_active_by_pane(pane)
+    ) or
+      starting_role?(agent["name"])
+  end
+
+  defp starting_role?("run-" <> _ = name) do
+    Enum.any?(Jarvis2.Runs.active_runs(), fn run ->
+      run.status == :starting and not is_nil(run.role) and
+        Jarvis2.Runs.Launcher.agent_name(run) == name
+    end)
+  end
+
+  defp starting_role?(_), do: false
 
   defp rename_tab(view, pane, caller, socket) do
     workspace =

@@ -40,6 +40,7 @@ defmodule Jarvis2Web.Router do
       live "/blackboard", BlackboardLive
       live "/events", EventLive
       live "/settings", SettingsLive
+      live "/roles", RolesLive
       live "/kanban", KanbanLive.Index, :index
       live "/kanban/cards/:id", KanbanLive.Index, :show
       live "/kanban/cards/:id/answer", KanbanLive.Index, :answer

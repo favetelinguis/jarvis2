@@ -1,5 +1,5 @@
 defmodule Jarvis2.PresentationTest do
-  use ExUnit.Case, async: false
+  use Jarvis2.DataCase, async: false
 
   alias Jarvis2.Herdr.Socket
   alias Jarvis2.Automations.Presentation
@@ -134,6 +134,71 @@ defmodule Jarvis2.PresentationTest do
                    1_000
 
     refute_receive {:write, _}, 100
+  end
+
+  test "role-labelled run panes are not renamed but tabs still are", %{socket: socket} do
+    {:ok, run} =
+      Jarvis2.Runs.create_run(%{name: "role", role: "planner", task: "test", cwd: File.cwd!()})
+
+    run
+    |> Jarvis2.Runs.Run.progress_changeset(%{pane_id: "w1:p1", status: :working})
+    |> Repo.update!()
+
+    {:ok, mirror} = start_supervised({Mirror, view(false)})
+
+    start_supervised!(
+      {Presentation, [name: nil, mirror: mirror, socket: socket, debounce_ms: 20]}
+    )
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_detected",
+      {:jarvis2, "herdr:pane.agent_detected",
+       %{
+         data: %{
+           "pane_id" => "w1:p1",
+           "workspace_id" => "w1",
+           "agent" => "pi",
+           "released" => false
+         }
+       }}
+    )
+
+    assert_receive {:write, %{"method" => "tab.rename"}}, 1_000
+    refute_receive {:write, %{"method" => "pane.rename"}}, 150
+  end
+
+  test "detection during launch does not overwrite the role label", %{socket: socket} do
+    {:ok, run} =
+      Jarvis2.Runs.create_run(%{name: "role", role: "planner", task: "test", cwd: File.cwd!()})
+
+    fresh =
+      update_in(view(false).snapshot["agents"], fn [agent] ->
+        [Map.put(agent, "name", Jarvis2.Runs.Launcher.agent_name(run))]
+      end)
+
+    {:ok, mirror} = start_supervised({Mirror, fresh})
+
+    start_supervised!(
+      {Presentation, [name: nil, mirror: mirror, socket: socket, debounce_ms: 20]}
+    )
+
+    Phoenix.PubSub.local_broadcast(
+      Jarvis2.PubSub,
+      "herdr:pane.agent_detected",
+      {:jarvis2, "herdr:pane.agent_detected",
+       %{
+         data: %{
+           "pane_id" => "w1:p1",
+           "workspace_id" => "w1",
+           "agent" => "pi",
+           "released" => false
+         }
+       }}
+    )
+
+    assert_receive {:write, %{"method" => "tab.rename"}}, 1_000
+    refute_receive {:write, %{"method" => "pane.rename"}}, 150
   end
 
   test "ignores stale or mismatched events and does not guess a branch", %{socket: socket} do

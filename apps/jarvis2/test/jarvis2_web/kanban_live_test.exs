@@ -25,6 +25,20 @@ defmodule Jarvis2Web.KanbanLiveTest do
     assert Kanban.get_card(card.id).column == :scratch
   end
 
+  test "skill reports are grouped by stage and update the open panel", %{conn: conn} do
+    {:ok, run} = Runs.create_run(%{name: "planner", task: "test", cwd: File.cwd!()})
+    {:ok, card} = Kanban.create_card(%{title: "Idea", cwd: File.cwd!()})
+    card = card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+    {:ok, view, _} = live(conn, "/kanban/cards/#{card.id}")
+    assert has_element?(view, "#skills-planning", "No skills reported")
+    assert {:ok, _} = Kanban.report_skill(run.id, "planning", "Clarify scope")
+    assert has_element?(view, "#skills-planning", "planning — Clarify scope")
+    card |> Ecto.Changeset.change(stage: :implementation) |> Repo.update!()
+    assert {:ok, _} = Kanban.report_skill(run.id, "coding", "Write tests")
+    assert has_element?(view, "#skills-planning", "planning — Clarify scope")
+    assert has_element?(view, "#skills-implementation", "coding — Write tests")
+  end
+
   test "worktree form lists branches and remains usable when Herdr is unavailable", %{conn: conn} do
     path = Path.join(System.tmp_dir!(), "j2-ui-#{System.unique_integer([:positive])}.sock")
     parent = self()

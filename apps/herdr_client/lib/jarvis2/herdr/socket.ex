@@ -11,6 +11,7 @@ defmodule Jarvis2.Herdr.Socket do
 
   @connect_timeout 1_000
   @packet_limit 2_097_152
+  @request_limit 1_048_576
 
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -22,15 +23,21 @@ defmodule Jarvis2.Herdr.Socket do
     timeout = Keyword.get(opts, :timeout, 5_000)
 
     with true <- is_integer(timeout) and timeout > 0,
-         {:ok, encoded} <- Jason.encode(%{id: "1", method: method, params: params}) do
+         {:ok, encoded} <- Jason.encode(%{id: "1", method: method, params: params}),
+         :ok <- request_size(encoded) do
       case path(server) do
         {:ok, path} -> exchange(path, encoded, timeout)
         :error -> error("disconnected", "Herdr socket unavailable")
       end
     else
       false -> error("invalid_request", "timeout must be positive")
+      {:error, :too_large} -> error("invalid_request", "encoded request exceeds the Herdr limit")
       {:error, _} -> error("invalid_request", "request cannot be encoded as JSON")
     end
+  end
+
+  defp request_size(encoded) do
+    if byte_size(encoded) + 1 <= @request_limit, do: :ok, else: {:error, :too_large}
   end
 
   defp path(server) do

@@ -520,10 +520,21 @@ defmodule Jarvis2.Herdr.Actions do
   defp enabled?(scenario), do: scenario in Application.get_env(:jarvis2, :live_scenarios, [])
   defp disabled, do: {:error, %{code: "disabled", message: "scenario is disabled"}}
 
-  defp valid_prompt?(target, text, wait) do
-    is_binary(target) and byte_size(target) in 1..128 and is_binary(text) and
-      byte_size(text) in 1..8_192 and String.valid?(text) and is_boolean(wait) and
+  @prompt_limit 65_536
+  def prompt_limit, do: @prompt_limit
+
+  def valid_prompt_text?(text) do
+    is_binary(text) and byte_size(text) in 1..@prompt_limit and valid_prompt_characters?(text)
+  end
+
+  def valid_prompt_characters?(text) do
+    is_binary(text) and String.valid?(text) and
       not Enum.any?(String.to_charlist(text), &(&1 in 0..8 or &1 in 11..31 or &1 in 127..159))
+  end
+
+  defp valid_prompt?(target, text, wait) do
+    is_binary(target) and byte_size(target) in 1..128 and is_boolean(wait) and
+      valid_prompt_text?(text)
   end
 
   defp outcome({:ok, _}), do: "ok"

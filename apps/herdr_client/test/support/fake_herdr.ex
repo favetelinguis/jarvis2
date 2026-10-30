@@ -7,6 +7,8 @@ defmodule Jarvis2.Test.FakeHerdr do
         :binary,
         active: false,
         packet: :line,
+        packet_size: 1_048_576,
+        buffer: 1_048_577,
         ifaddr: {:local, path}
       ])
 

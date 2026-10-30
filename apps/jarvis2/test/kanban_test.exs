@@ -4,6 +4,11 @@ defmodule Jarvis2.KanbanTest do
   alias Jarvis2.{Journal, Kanban, Runs}
   alias Jarvis2.Kanban.Card
 
+  defp build_prompt(card, rounds, feedback \\ nil, opts \\ []) do
+    {:ok, role} = Jarvis2.Roles.get(Jarvis2.Kanban.Kind.stage(card.kind, card.stage).role)
+    Jarvis2.Kanban.Prompt.build(card, rounds, feedback, Keyword.put(opts, :role, role))
+  end
+
   defp card do
     {:ok, card} =
       Kanban.create_card(%{title: "Private idea", body: "Private body", cwd: File.cwd!()})
@@ -104,6 +109,57 @@ defmodule Jarvis2.KanbanTest do
     end
   end
 
+  test "prompts contain only role instructions and card context" do
+    card = card()
+    role = %Jarvis2.Roles.Role{prompt: "Do the role's work."}
+    task = Jarvis2.Kanban.Prompt.build(card, [], nil, role: role)
+    assert task =~ "Do the role's work.\n\nCard: Private idea\nIdea: Private body"
+    assert Jarvis2.Runs.Prompt.build(%{name: "label", task: task}) == task
+    for tool <- ~w(ask_human request_approval submit_result), do: refute(task =~ tool)
+    assert Jarvis2.Runs.Prompt.build(%{task: "  unmodified task\n"}) == "  unmodified task\n"
+  end
+
+  test "skill reports are validated and grouped by stage" do
+    {card, run} = agent_card()
+
+    for {name, reason} <- [
+          {"", "x"},
+          {"x", "  "},
+          {String.duplicate("é", 51), "x"},
+          {"x", String.duplicate("é", 251)}
+        ] do
+      assert {:error, _} = Kanban.report_skill(run.id, name, reason)
+    end
+
+    assert {:ok, _} = Kanban.report_skill(run.id, "planning-skill", "Plan")
+    card |> Ecto.Changeset.change(stage: :implementation) |> Repo.update!()
+    assert {:ok, _} = Kanban.report_skill(run.id, "coding-skill", "Implement")
+
+    assert Enum.map(Kanban.get_card(card.id).skill_uses, &{&1.stage, &1.name}) == [
+             {:planning, "planning-skill"},
+             {:implementation, "coding-skill"}
+           ]
+
+    assert {:ok, _} =
+             Kanban.report_skill(run.id, String.duplicate("é", 50), String.duplicate("é", 250))
+  end
+
+  test "skill report cap is atomic and applies independently per stage" do
+    {card, run} = agent_card()
+    for n <- 1..49, do: assert({:ok, _} = Kanban.report_skill(run.id, "skill-#{n}", "needed"))
+
+    results =
+      1..2
+      |> Task.async_stream(fn n -> Kanban.report_skill(run.id, "last-#{n}", "needed") end)
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &match?({:error, _}, &1)) == 1
+    assert length(Kanban.get_card(card.id).skill_uses) == 50
+    card |> Ecto.Changeset.change(stage: :implementation) |> Repo.update!()
+    assert {:ok, _} = Kanban.report_skill(run.id, "new-stage", "needed")
+  end
+
   test "implementation prompts omit planning context and refer to PLAN.md" do
     card = %{
       card()
@@ -119,14 +175,14 @@ defmodule Jarvis2.KanbanTest do
       answers: %{"Q1" => %{"kind" => "custom", "text" => "secret", "note" => ""}}
     }
 
-    prompt = Jarvis2.Kanban.Prompt.build(card, [round])
+    prompt = build_prompt(card, [round])
     assert prompt =~ "PLAN.md"
     assert prompt =~ "implementation report"
     refute prompt =~ "Do not edit files"
     refute prompt =~ "Planning secret"
     refute prompt =~ "secret plan"
     refute prompt =~ "old report"
-    assert byte_size(prompt) <= 6_000
+    assert byte_size(prompt) <= 65_536
 
     started = DateTime.utc_now()
     planning = %{round | inserted_at: DateTime.add(started, -1, :second)}
@@ -153,13 +209,13 @@ defmodule Jarvis2.KanbanTest do
     }
 
     restored =
-      Jarvis2.Kanban.Prompt.build(card, [planning, implementation], "continue", restored: true)
+      build_prompt(card, [planning, implementation], "continue", restored: true)
 
     assert restored =~ "Implementation decision"
     assert restored =~ "implementation feedback"
     refute restored =~ "Planning secret"
     refute restored =~ "old planning feedback"
-    assert byte_size(restored) <= 6_000
+    assert byte_size(restored) <= 65_536
     assert Jarvis2.Kanban.Prompt.reopen("fix", :plan, :implementation) =~ "implementation report"
     assert Jarvis2.Kanban.Prompt.answers(round, :implementation) =~ "implementation report"
   end
@@ -208,8 +264,8 @@ defmodule Jarvis2.KanbanTest do
     assert {:ok, _} = Kanban.submit_deliverable(run.id, html)
     card = Kanban.get_card(card.id)
     assert card.column == :done
-    prompt = Jarvis2.Kanban.Prompt.build(card, [], String.duplicate("f", 1_000), restored: true)
-    assert byte_size(prompt) <= 6_000
+    prompt = build_prompt(card, [], String.duplicate("f", 1_000), restored: true)
+    assert byte_size(prompt) <= 65_536
     assert prompt =~ Jarvis2.Kanban.Slides.path(card.id)
     refute prompt =~ html
   end
@@ -262,7 +318,7 @@ defmodule Jarvis2.KanbanTest do
     assert Kanban.get_round(round.id).answers == %{}
   end
 
-  test "rejects a complete round that exceeds the prompt cap without losing drafts" do
+  test "delivers a complete round exceeding the former prompt cap without losing drafts" do
     {card, run} = agent_card()
 
     questions =
@@ -288,9 +344,30 @@ defmodule Jarvis2.KanbanTest do
       end)
 
     {:ok, round} = Kanban.save_draft(round, answers)
-    assert {:error, "Answers are too long" <> _} = Kanban.submit_answers(round)
-    assert Kanban.get_card(card.id).column == :awaiting_user
+    assert byte_size(Jarvis2.Kanban.Prompt.answers(round)) > 6_000
+    assert {:ok, _} = Kanban.submit_answers(round)
+    assert_eventually(fn -> Journal.count(type: "kanban.delivery", run_id: run.id) > 0 end)
+    assert Kanban.get_card(card.id).column == :agent
     assert Kanban.get_round(round.id).answers == answers
+  end
+
+  test "answers and feedback with forbidden controls are rejected without a transition" do
+    {card, run} = agent_card()
+    {:ok, round} = Kanban.ask_questions(run.id, [question()])
+
+    {:ok, round} =
+      Kanban.save_draft(round, %{"Q1" => %{"kind" => "custom", "text" => "bad\u0001answer"}})
+
+    assert {:error, "Answers are invalid or too long" <> _} = Kanban.submit_answers(round)
+    assert Kanban.get_card(card.id).column == :awaiting_user
+
+    {:ok, _} = Kanban.submit_deliverable(run.id, "result")
+    done = Kanban.get_card(card.id)
+
+    assert {:error, "Feedback produces an invalid" <> _} =
+             Kanban.reopen(done, "bad\u0001feedback")
+
+    assert Kanban.get_card(card.id).column == :done
   end
 
   test "replacement prompts stay within the task budget" do
@@ -311,12 +388,11 @@ defmodule Jarvis2.KanbanTest do
       answers: %{"Q1" => %{"kind" => "recommended", "text" => "yes", "note" => ""}}
     }
 
-    prompt = Jarvis2.Kanban.Prompt.build(card, [round], String.duplicate("f", 1_000))
-    assert byte_size(prompt) <= 6_000
+    prompt = build_prompt(card, [round], String.duplicate("f", 1_000))
+    assert byte_size(prompt) <= 65_536
     assert String.valid?(prompt)
-    assert prompt =~ "submit_deliverable"
     assert prompt =~ "Decision"
-    assert String.ends_with?(Jarvis2.Kanban.Prompt.answers(round), "Chat output stays minimal.")
+    refute Jarvis2.Kanban.Prompt.answers(round) =~ "Chat output stays minimal."
   end
 
   test "kind prompts keep the card and feedback within the task limit" do
@@ -349,23 +425,43 @@ defmodule Jarvis2.KanbanTest do
         }
       }
 
-      prompt = Jarvis2.Kanban.Prompt.build(card, [round], feedback)
-      assert byte_size(prompt) <= 6_000
+      prompt = build_prompt(card, [round], feedback)
+      assert byte_size(prompt) <= 65_536
       assert prompt =~ body
       assert prompt =~ feedback
       assert prompt =~ level
       assert prompt =~ heading
-      assert prompt =~ "Keep your own chat output minimal"
+      assert prompt =~ "keep chat output minimal"
       assert String.valid?(prompt)
-      restored = Jarvis2.Kanban.Prompt.build(card, [round], feedback, restored: true)
-      assert byte_size(restored) <= 6_000
+      restored = build_prompt(card, [round], feedback, restored: true)
+      assert byte_size(restored) <= 65_536
       assert restored =~ "Restored from archive"
       assert restored =~ feedback
       assert String.valid?(restored)
       reopened = Jarvis2.Kanban.Prompt.reopen(feedback, kind)
       assert reopened =~ Jarvis2.Kanban.Kind.noun(kind)
-      assert String.ends_with?(reopened, "Chat output stays minimal.")
+      refute reopened =~ "Chat output stays minimal."
     end
+  end
+
+  test "only optional history is truncated, preserving mandatory multibyte content" do
+    card = %{
+      card()
+      | body: String.duplicate("é", 1_000),
+        deliverable: String.duplicate("界", 20_000)
+    }
+
+    role = %Jarvis2.Roles.Role{name: "custom", prompt: String.duplicate("p", 58_000)}
+    feedback = String.duplicate("f", 1_000)
+    task = Jarvis2.Kanban.Prompt.build(card, [], feedback, role: role)
+    text = Jarvis2.Runs.Prompt.build(%{name: card.title, task: task})
+    assert byte_size(text) <= 65_536
+    assert String.valid?(text)
+    assert text =~ role.prompt
+    assert text =~ card.body
+    assert text =~ feedback
+    assert text =~ "Previous plan:"
+    refute text =~ card.deliverable
   end
 
   test "requires feedback to reopen and preserves a done card when Herdr is unavailable" do

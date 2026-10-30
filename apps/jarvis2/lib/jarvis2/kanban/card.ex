@@ -23,6 +23,7 @@ defmodule Jarvis2.Kanban.Card do
     belongs_to :run, Jarvis2.Runs.Run, type: :binary_id
     has_many :rounds, Jarvis2.Kanban.Round
     has_many :feedback, Jarvis2.Kanban.Feedback
+    has_many :skill_uses, Jarvis2.Kanban.SkillUse, preload_order: [asc: :id]
     timestamps(type: :utc_datetime_usec)
   end
 

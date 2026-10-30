@@ -3,54 +3,45 @@ defmodule Jarvis2.Kanban.Prompt do
 
   alias Jarvis2.Kanban.{Kind, Slides}
 
-  def build(card, rounds \\ [], feedback \\ nil, opts \\ [])
-
-  def build(%{stage: :implementation} = card, rounds, feedback, opts) do
-    prefix =
-      Kind.protocol(card.kind, card.stage) <>
-        "\n\nCard: " <> card.title <> "\nImplement PLAN.md.\n"
-
-    base = prefix <> truncate(feedback_text(feedback, opts), max(0, 6_000 - byte_size(prefix)))
-    prior_feedback = if Ecto.assoc_loaded?(card.feedback), do: card.feedback, else: []
-
-    history =
-      (rounds ++ prior_feedback)
-      |> Enum.filter(&in_stage?(&1, card.stage_started_at))
-      |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
-      |> Enum.map(&history_item(&1, card.stage))
-      |> Enum.reject(&(&1 == ""))
-
-    base <> history_text(history, max(0, 6_000 - byte_size(base)))
-  end
-
   def build(card, rounds, feedback, opts) do
+    role = Keyword.fetch!(opts, :role)
+    budget = Jarvis2.Herdr.Actions.prompt_limit()
     prior_feedback = if Ecto.assoc_loaded?(card.feedback), do: card.feedback, else: []
 
     history =
       (rounds ++ prior_feedback)
+      |> Enum.filter(fn item ->
+        card.stage != :implementation or in_stage?(item, card.stage_started_at)
+      end)
       |> Enum.sort_by(&(&1.inserted_at || ~U[1970-01-01 00:00:00Z]), {:desc, DateTime})
       |> Enum.map(&history_item(&1, card.stage))
       |> Enum.reject(&(&1 == ""))
-
-    prefix = Kind.protocol(card.kind, card.stage) <> "\n\nCard: " <> card.title <> "\nIdea: "
 
     deck =
       if card.deliverable && Kind.deliverable_type(card.kind) == :html,
         do: "\n" <> deck_pointer(card.id) <> "\n",
         else: ""
 
-    suffix = "\n" <> feedback_text(feedback, opts) <> deck
+    base =
+      Kind.protocol(card.kind, card.stage, role.prompt) <>
+        "\n\nCard: " <>
+        card.title <>
+        "\nIdea: " <>
+        (card.body || "") <> "\n" <> feedback_text(feedback, opts) <> deck
 
-    # The full restore reason takes priority when the protocol and maximum-sized body exceed the task cap.
-    body_budget = max(0, 6_000 - byte_size(prefix) - byte_size(suffix))
-    base = prefix <> truncate(card.body || "", body_budget) <> suffix
+    base <> optional_context(card, history, max(0, budget - byte_size(base)))
+  end
 
-    history_budget = max(0, 6_000 - byte_size(base))
-    reserve = if card.deliverable, do: min(300, history_budget), else: 0
+  defp optional_context(card, history, history_budget) do
+    has_previous =
+      (card.stage != :implementation and card.deliverable) &&
+        Kind.deliverable_type(card.kind) != :html
+
+    reserve = if has_previous, do: min(300, history_budget), else: 0
     context = history_text(history, history_budget - reserve)
 
     previous =
-      if card.deliverable && Kind.deliverable_type(card.kind) != :html,
+      if has_previous,
         do:
           truncate(
             "\nPrevious " <> Kind.noun(card.kind, card.stage) <> ":\n" <> card.deliverable,
@@ -58,7 +49,7 @@ defmodule Jarvis2.Kanban.Prompt do
           ),
         else: ""
 
-    base <> context <> previous
+    context <> previous
   end
 
   defp in_stage?(%{inserted_at: %DateTime{} = inserted_at}, %DateTime{} = started_at),
@@ -101,8 +92,7 @@ defmodule Jarvis2.Kanban.Prompt do
         "Continue: ask the next round if the grilling level allows, or submit_deliverable if nothing is left."
       end
 
-    "Answers to round #{round.number}:\n" <>
-      lines <> "\n" <> continuation <> " Chat output stays minimal."
+    "Answers to round #{round.number}:\n" <> lines <> "\n" <> continuation
   end
 
   def reopen(text, kind, stage \\ nil, card_id \\ nil) do
@@ -116,7 +106,7 @@ defmodule Jarvis2.Kanban.Prompt do
     "The human reopened this card with this feedback: " <>
       text <>
       ". Re-read your #{noun}, ask what is missing or unclear with ask_questions, or submit an updated #{noun}." <>
-      deck <> " Chat output stays minimal."
+      deck
   end
 
   defp deck_pointer(id),

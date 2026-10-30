@@ -49,7 +49,13 @@ defmodule Jarvis2.Runs do
   def create_run(attrs) do
     case Repo.insert(Run.changeset(%Run{}, with_defaults(attrs))) do
       {:ok, run} ->
-        record(run, "run.created", %{kind: run.kind, model: run.model, thinking: run.thinking})
+        record(run, "run.created", %{
+          kind: run.kind,
+          model: run.model,
+          thinking: run.thinking,
+          role: run.role
+        })
+
         broadcast(run)
         {:ok, run}
 
@@ -177,13 +183,21 @@ defmodule Jarvis2.Runs do
   end
 
   def prompt_run(%Run{} = run, text, opts \\ []) when is_binary(text) do
-    text = String.trim(text)
-
     cond do
-      text == "" -> {:error, "Write something to send."}
-      byte_size(text) > 6_000 -> {:error, "The prompt is too long."}
-      not Run.active?(run) -> {:error, "The run is not active."}
-      true -> Launcher.prompt(run, text, opts)
+      text == "" ->
+        {:error, "Write something to send."}
+
+      not Jarvis2.Herdr.Actions.valid_prompt_text?(text) ->
+        {:error, "The prompt is invalid or too long (maximum 65536 bytes)."}
+
+      String.trim(text) == "" ->
+        {:error, "Write something to send."}
+
+      not Run.active?(run) ->
+        {:error, "The run is not active."}
+
+      true ->
+        Launcher.prompt(run, String.trim(text), opts)
     end
   end
 
@@ -286,7 +300,12 @@ defmodule Jarvis2.Runs do
 
   defp with_defaults(attrs) do
     defaults = Map.new(defaults(), fn {key, value} -> {to_string(key), value} end)
-    Map.merge(defaults, Map.new(attrs, fn {key, value} -> {to_string(key), value} end))
+    values = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+
+    Map.merge(
+      defaults,
+      Map.reject(values, fn {key, value} -> key in ["model", "thinking"] and is_nil(value) end)
+    )
   end
 
   defp now, do: DateTime.utc_now()

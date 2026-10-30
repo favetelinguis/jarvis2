@@ -2,6 +2,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
   # Interview drafts and feedback must not be included in LiveView's parameter logs.
   use Phoenix.LiveView, layout: {Jarvis2Web.Layouts, :app}, log: false
   import Jarvis2Web.Components
+  import Jarvis2Web.KanbanLive.SkillUses, only: [skill_uses: 1]
   alias Phoenix.LiveView.JS
   alias Jarvis2.{Kanban, Runs}
   alias Jarvis2.Kanban.{Card, Kind}
@@ -361,6 +362,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
           <section :if={@card.accepted_plan}>
             <h3>Accepted plan</h3><pre>{@card.accepted_plan}</pre>
           </section>
+          <.skill_uses card={@card} />
           <section :if={@card.deliverable}>
             <h3>{String.capitalize(Kind.noun(@card.kind, @card.stage))}</h3>
             <%= if Kind.deliverable_type(@card.kind) == :html do %>

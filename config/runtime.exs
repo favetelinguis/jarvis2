@@ -1,5 +1,9 @@
 import Config
 
+if roles_dir = System.get_env("JARVIS2_ROLES_DIR") do
+  config :jarvis2, :roles_dir, Path.expand(roles_dir)
+end
+
 if config_env() == :test do
   state_dir =
     Path.join(System.tmp_dir!(), "jarvis2-test-#{System.pid()}-#{System.os_time(:nanosecond)}")

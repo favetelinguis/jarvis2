@@ -11,6 +11,7 @@ defmodule Jarvis2.Runs.Run do
   schema "runs" do
     field(:name, :string)
     field(:kind, :string, default: "pi")
+    field(:role, :string)
     field(:model, :string)
     field(:thinking, :string)
     field(:cwd, :string)
@@ -41,6 +42,7 @@ defmodule Jarvis2.Runs.Run do
     run
     |> cast(attrs, [
       :name,
+      :role,
       :kind,
       :model,
       :thinking,
@@ -55,12 +57,29 @@ defmodule Jarvis2.Runs.Run do
       if Jarvis2.Herdr.Workspaces.valid_worktree?(value), do: [], else: [worktree: "is invalid"]
     end)
     |> validate_length(:name, max: 64)
-    |> validate_length(:task, max: 6_000, count: :bytes)
+    |> validate_prompt()
     |> validate_inclusion(:kind, Jarvis2.Herdr.Actions.agent_kinds())
     |> validate_inclusion(:thinking, @thinking)
     |> validate_format(:session_id, ~r/\A[A-Za-z0-9]([A-Za-z0-9._-]{0,62}[A-Za-z0-9])?\z/)
     |> validate_model_field(:model)
     |> validate_cwd()
+  end
+
+  defp validate_prompt(changeset) do
+    name = get_field(changeset, :name)
+    task = get_field(changeset, :task)
+
+    valid = fn text -> Jarvis2.Herdr.Actions.valid_prompt_characters?(text) end
+
+    if is_binary(name) and is_binary(task) and
+         not (valid.(name) and valid.(task) and
+                Jarvis2.Herdr.Actions.valid_prompt_text?(
+                  Jarvis2.Runs.Prompt.build(%{name: name, task: task})
+                )) do
+      add_error(changeset, :task, "complete prompt is invalid or exceeds 65536 bytes")
+    else
+      changeset
+    end
   end
 
   @doc "A Mix job: no agent, model or thinking level; the task is the allow-listed Mix task."
@@ -93,14 +112,20 @@ defmodule Jarvis2.Runs.Run do
     ])
   end
 
+  def valid_model?(model) when is_binary(model),
+    do:
+      byte_size(model) <= 128 and
+        Regex.match?(~r{\A[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:/-]*\z}, model)
+
+  def valid_model?(_), do: false
+
   # The model becomes agent arguments typed into a shell, so only plain identifier characters pass.
   @doc false
   def validate_model_field(changeset, field) do
     validate_change(changeset, field, fn ^field, model ->
-      if Regex.match?(~r{\A[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:/-]*\z}, model) and
-           byte_size(model) <= 128,
-         do: [],
-         else: [{field, "must look like provider/model"}]
+      if valid_model?(model),
+        do: [],
+        else: [{field, "must look like provider/model"}]
     end)
   end
 

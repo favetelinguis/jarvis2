@@ -118,6 +118,17 @@ defmodule Jarvis2.HerdrClientTest do
     assert {:ok, _} = Jarvis2.Herdr.Client.snapshot(server: socket)
   end
 
+  test "rejects oversized encoded requests before sending", %{socket: socket} do
+    text = String.duplicate("\"", 530_000)
+    assert byte_size(text) < 1_048_576
+
+    assert {:error, %{code: "invalid_request"}} =
+             Jarvis2.Herdr.Socket.request("notification.show", %{text: text}, server: socket)
+
+    refute_receive {:request, _}, 100
+    assert {:ok, _} = Jarvis2.Herdr.Client.snapshot(server: socket)
+  end
+
   test "invalid request values return errors without crashing the connection", %{socket: socket} do
     assert {:error, %{code: "invalid_request"}} =
              Jarvis2.Herdr.Socket.request("test.delay", %{pid: self()}, server: socket)

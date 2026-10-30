@@ -68,7 +68,11 @@ defmodule Jarvis2.RunsTest do
 
       for bad <- [
             %{name: ""},
-            %{task: String.duplicate("x", 6_001)},
+            %{task: String.duplicate("x", 65_537)},
+            %{task: "bad\u0001text"},
+            %{task: "bad\r"},
+            %{task: <<255>>},
+            %{name: "bad\u0001name"},
             %{cwd: "relative"},
             %{cwd: Path.join(cwd, "missing")},
             %{thinking: "extreme"},
@@ -79,6 +83,170 @@ defmodule Jarvis2.RunsTest do
           ] do
         assert {:error, %Ecto.Changeset{valid?: false}} = Runs.create_run(Map.merge(attrs, bad))
       end
+    end
+  end
+
+  test "card launch uses its current role and sends long multibyte text intact", ctx do
+    role_dir = Path.join(ctx.cwd, "roles")
+    File.mkdir_p!(role_dir)
+    role_body = String.duplicate("é quote \" ", 2_000)
+
+    File.write!(
+      Path.join(role_dir, "planner.md"),
+      "---\nname: planner\nmodel: vendor/custom\neffort: high\n---\n" <> role_body
+    )
+
+    config(:roles_dir, role_dir)
+    idea = String.duplicate("idea", 500)
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Build", body: idea, cwd: ctx.cwd})
+    assert {:ok, card} = Jarvis2.Kanban.move(card, :agent)
+    assert card.run.role == "planner"
+    assert card.run.model == "vendor/custom"
+    assert card.run.thinking == "high"
+    assert card.run.task =~ String.trim(role_body)
+    assert card.run.task =~ idea
+    refute card.run.task =~ "requirements engineer"
+    assert_receive {:request, "pane.rename", %{"label" => "planner"}}, 3_000
+    assert_receive {:request, "agent.start", %{"args" => args, "name" => name}}, 3_000
+    assert name == Launcher.agent_name(card.run)
+    assert args |> Enum.join(" ") =~ "--provider vendor --model custom --thinking high"
+
+    assert_receive {:request, "pane.report_metadata",
+                    %{
+                      "pane_id" => "w1:p9",
+                      "source" => "custom:jarvis2-role",
+                      "agent" => "pi",
+                      "display_agent" => "planner"
+                    }},
+                   3_000
+
+    assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
+    assert text =~ String.trim(role_body)
+    assert text =~ idea
+    assert byte_size(text) > 8_192 and byte_size(text) <= 65_536
+    assert String.valid?(text)
+    assert_eventually(fn -> Runs.get_run(card.run_id).status == :working end)
+  end
+
+  test "a multibyte role reaches the exact final prompt limit", ctx do
+    role_dir = Path.join(ctx.cwd, "roles")
+    File.mkdir_p!(role_dir)
+    config(:roles_dir, role_dir)
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Boundary", body: "An idea", cwd: ctx.cwd})
+    sample = Jarvis2.Kanban.Prompt.build(card, [], nil, role: %Jarvis2.Roles.Role{prompt: "x"})
+    overhead = byte_size(Jarvis2.Runs.Prompt.build(%{name: card.title, task: sample}))
+    remaining = 65_536 - overhead
+
+    body =
+      "x" <>
+        String.duplicate("é", div(remaining, 2)) <> if(rem(remaining, 2) == 1, do: "x", else: "")
+
+    File.write!(Path.join(role_dir, "planner.md"), "---\nname: planner\n---\n" <> body)
+    assert {:ok, started} = Jarvis2.Kanban.move(card, :agent)
+    assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
+    assert byte_size(text) == 65_536
+    assert text =~ body
+    assert text =~ "An idea"
+    assert_eventually(fn -> Runs.get_run(started.run_id).status == :working end)
+  end
+
+  test "role omissions use settings and invalid or oversized roles refuse moves", ctx do
+    role_dir = Path.join(ctx.cwd, "roles")
+    File.mkdir_p!(role_dir)
+    file = Path.join(role_dir, "planner.md")
+    config(:roles_dir, role_dir)
+    File.write!(file, "---\nname: planner\n---\nCustom role")
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Build", cwd: ctx.cwd})
+    assert {:ok, started} = Jarvis2.Kanban.move(card, :agent)
+    assert started.run.model == Runs.defaults().model
+    assert started.run.thinking == Runs.defaults().thinking
+    assert started.run.task =~ "Custom role"
+    assert_eventually(fn -> Runs.get_run(started.run_id).status == :working end)
+    drain_requests()
+
+    for content <- [
+          "---\nname: planner\nmodel: invalid;bad\n---\nbody",
+          "---\nname: planner\n---\n" <> String.duplicate("x", 65_536)
+        ] do
+      File.write!(file, content)
+      {:ok, next} = Jarvis2.Kanban.create_card(%{title: "Next", cwd: ctx.cwd})
+      assert {:error, message} = Jarvis2.Kanban.move(next, :agent)
+      assert message =~ "planner"
+      assert Jarvis2.Kanban.get_card(next.id).column == :scratch
+      refute_receive {:request, "tab.create", _}, 100
+    end
+  end
+
+  test "invalid implementation role leaves the accepted plan file untouched", ctx do
+    role_dir = Path.join(ctx.cwd, "roles")
+    File.mkdir_p!(role_dir)
+
+    File.write!(
+      Path.join(role_dir, "implementer.md"),
+      "---\nname: implementer\n---\n" <> String.duplicate("x", 65_536)
+    )
+
+    config(:roles_dir, role_dir)
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan", cwd: ctx.cwd})
+    {:ok, run} = Runs.create_run(%{name: "planner", task: "plan", cwd: ctx.cwd})
+
+    card =
+      card
+      |> Ecto.Changeset.change(column: :done, deliverable: "new plan", run_id: run.id)
+      |> Repo.update!()
+
+    File.write!(Path.join(ctx.cwd, "PLAN.md"), "old plan")
+    assert {:error, error} = Jarvis2.Kanban.advance(card)
+    assert error =~ "implementer"
+    assert File.read!(Path.join(ctx.cwd, "PLAN.md")) == "old plan"
+    assert Jarvis2.Kanban.get_card(card.id).stage == :planning
+    assert Jarvis2.Kanban.get_card(card.id).column == :done
+    refute_receive {:request, "tab.create", _}, 100
+  end
+
+  test "complete wrapped prompt is validated at the exact byte boundary", %{cwd: cwd} do
+    name = "boundary"
+    overhead = byte_size(Jarvis2.Runs.Prompt.build(%{name: name, task: "x"})) - 1
+    task = String.duplicate("x", 65_536 - overhead)
+    assert {:ok, run} = Runs.create_run(%{name: name, task: task, cwd: cwd})
+    assert byte_size(Jarvis2.Runs.Prompt.build(run)) == 65_536
+    assert {:error, _} = Runs.create_run(%{name: name, task: task <> "x", cwd: cwd})
+  end
+
+  test "role presentation failures are cosmetic and legacy runs do not set them", ctx do
+    Agent.update(ctx.behavior, fn behavior ->
+      behavior
+      |> Map.put("pane.rename", {:error, "failed"})
+      |> Map.put("pane.report_metadata", {:error, "failed"})
+    end)
+
+    {:ok, run} =
+      Runs.create_run(%{
+        name: "demo",
+        task: "work",
+        cwd: ctx.cwd,
+        role: "planner",
+        model: "vendor/custom",
+        thinking: "high"
+      })
+
+    assert Runs.launch(run).status == :working
+    assert_receive {:request, "pane.rename", %{"label" => "planner"}}
+    assert_receive {:request, "agent.start", _}
+    assert_receive {:request, "pane.report_metadata", %{"display_agent" => "planner"}}
+    :ok = GenServer.call(ctx.mirror, {:put, view()})
+    drain_requests()
+    {:ok, legacy} = Runs.create_run(%{name: "legacy", task: "work", cwd: ctx.cwd})
+    assert Runs.launch(legacy).status == :working
+    refute_receive {:request, "pane.rename", _}, 100
+    refute_receive {:request, "pane.report_metadata", _}, 100
+  end
+
+  defp drain_requests do
+    receive do
+      {:request, _, _} -> drain_requests()
+    after
+      0 -> :ok
     end
   end
 
@@ -93,6 +261,7 @@ defmodule Jarvis2.RunsTest do
     planner = planner |> Run.progress_changeset(%{status: :done}) |> Repo.update!()
     File.write!(Path.join(ctx.cwd, "PLAN.md"), "old plan")
     card |> Ecto.Changeset.change(column: :agent, run_id: planner.id) |> Repo.update!()
+    assert {:ok, _} = Jarvis2.Kanban.report_skill(planner.id, "planning", "Scope")
     plan = String.duplicate("private plan", 1_500)
     {:ok, _} = Jarvis2.Kanban.submit_deliverable(planner.id, plan)
     card = Jarvis2.Kanban.get_card(card.id)
@@ -106,11 +275,19 @@ defmodule Jarvis2.RunsTest do
     assert advanced.run.parent_run_id == planner.id
     assert advanced.run.task =~ "PLAN.md"
     refute advanced.run.task =~ plan
-    assert byte_size(advanced.run.task) <= 6_000
+    assert byte_size(advanced.run.task) <= 65_536
+    assert advanced.run.role == "implementer"
     assert_receive {:request, "pane.split", %{"target_pane_id" => "w1:p9", "env" => env}}, 3_000
     assert env["JARVIS2_RUN_ID"] == advanced.run_id
     refute_receive {:request, "tab.create", _}, 50
     assert_eventually(fn -> Runs.get_run(advanced.run_id).status == :working end)
+    assert {:ok, _} = Jarvis2.Kanban.report_skill(advanced.run_id, "coding", "Implement")
+
+    assert Enum.map(Jarvis2.Kanban.get_card(card.id).skill_uses, &{&1.stage, &1.name}) == [
+             {:planning, "planning"},
+             {:implementation, "coding"}
+           ]
+
     assert Runs.get_run(advanced.run_id).tab_id == planner.tab_id
     assert {:error, _} = Jarvis2.Kanban.submit_deliverable(planner.id, "obsolete")
 
@@ -228,8 +405,11 @@ defmodule Jarvis2.RunsTest do
       )
       |> Repo.update!()
 
+    assert {:ok, _} = Jarvis2.Kanban.report_skill(run.id, "coding", "Implement")
     assert {:ok, archived} = Jarvis2.Kanban.move(card, :archive)
     assert {:ok, restored} = Jarvis2.Kanban.reopen(archived, "Continue work")
+    assert [%{name: "coding", run_id: old_run_id}] = Jarvis2.Kanban.get_card(card.id).skill_uses
+    assert old_run_id == run.id
     assert restored.stage == :implementation
     assert restored.run.task =~ "PLAN.md"
     assert restored.run.task =~ "Continue work"
@@ -373,15 +553,15 @@ defmodule Jarvis2.RunsTest do
       assert start["kind"] == "pi"
 
       assert start["args"] ==
-               ~w(--provider openrouter --model openai/gpt-6-luna --thinking low --extension /home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js)
+               ~w(--provider openrouter --model openai/gpt-6-luna --thinking low --extension /home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js) ++
+                 [
+                   "--skill",
+                   Path.join([:code.priv_dir(:jarvis2), "skills", "jarvis2-slide-deck"])
+                 ]
 
       assert_receive {:request, "agent.prompt", %{"target" => "w1:p9", "text" => text}}
-      assert text =~ ~s(run "demo")
-      assert text =~ "ask_human"
-      assert text =~ "request_approval"
-      assert text =~ "submit_result"
-      assert String.ends_with?(text, "Task:\nwrite the report")
-      assert byte_size(text) <= 8_192
+      assert text == "write the report"
+      assert byte_size(text) <= 65_536
 
       events = Journal.recent(run_id: run.id)
       assert %{outcome: :ok} = Enum.find(events, &(&1.type == "run.start"))
@@ -553,8 +733,19 @@ defmodule Jarvis2.RunsTest do
       assert {:error, "The agent is busy" <> _} = Runs.prompt_run(run, "again")
       assert {:error, "Write something" <> _} = Runs.prompt_run(run, "   ")
 
-      assert {:error, "The prompt is too long."} =
-               Runs.prompt_run(run, String.duplicate("x", 6_001))
+      assert {:error, "The prompt is invalid or too long" <> _} =
+               Runs.prompt_run(run, String.duplicate("x", 65_537))
+    end
+
+    test "long follow-ups retain multibyte and escaped text while controls are rejected", %{
+      run: run
+    } do
+      text = String.duplicate("é\"", 4_000)
+      assert {:ok, _} = Runs.prompt_run(run, text)
+      assert_receive {:request, "agent.prompt", %{"text" => ^text}}
+      assert {:error, "The prompt is invalid" <> _} = Runs.prompt_run(run, "bad\u0001text")
+      assert {:error, "The prompt is invalid" <> _} = Runs.prompt_run(run, "bad\r")
+      assert {:error, "The prompt is invalid" <> _} = Runs.prompt_run(run, <<255>>)
     end
 
     test "can wait for a busy agent to become idle", %{run: run, mirror: mirror} do
@@ -603,8 +794,11 @@ defmodule Jarvis2.RunsTest do
       assert label == String.slice(title, 0, 32)
       assert_receive {:request, "agent.start", _}, 3_000
       assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
-      assert text =~ "ask_questions"
-      assert text =~ "Provide alternatives whenever applicable"
+      assert text =~ "requirements engineer"
+      assert text =~ "Card: #{title}"
+      refute text =~ "ask_human"
+      refute text =~ "request_approval"
+      refute text =~ "submit_result"
       assert_eventually(fn -> Journal.count(type: "run.start", run_id: moved.run_id) > 0 end)
       assert Runs.get_run(moved.run_id).status == :working
     end
@@ -794,9 +988,11 @@ defmodule Jarvis2.RunsTest do
       run = working_run(ctx)
       {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Plan this", cwd: ctx.cwd})
       card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+      assert {:ok, _} = Jarvis2.Kanban.report_skill(run.id, "planning", "Define scope")
       assert {:ok, _} = Jarvis2.Kanban.submit_deliverable(run.id, "The plan")
       card = Jarvis2.Kanban.get_card(card.id)
       assert {:ok, reopened} = Jarvis2.Kanban.reopen(card, "Add alternatives")
+      assert [%{name: "planning"}] = Jarvis2.Kanban.get_card(card.id).skill_uses
       assert reopened.run_id == run.id
       assert_receive {:request, "agent.prompt", %{"text" => text}}, 3_000
       assert text =~ "Add alternatives"
@@ -1172,6 +1368,11 @@ defmodule Jarvis2.RunsTest do
     :ok = GenServer.call(mirror, {:put, view()})
     {:reply, %{result: %{type: "ok"}}}
   end
+
+  defp respond(%{"method" => "pane.rename"}, _mirror, _), do: {:reply, %{result: %{type: "ok"}}}
+
+  defp respond(%{"method" => "pane.report_metadata"}, _mirror, _),
+    do: {:reply, %{result: %{type: "ok"}}}
 
   defp respond(%{"method" => "pane.close"}, _mirror, _), do: {:reply, %{result: %{type: "ok"}}}
 

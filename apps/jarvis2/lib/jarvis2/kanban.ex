@@ -2,9 +2,10 @@ defmodule Jarvis2.Kanban do
   @moduledoc "Cards and persistent question rounds for the deliverables board."
   import Ecto.Query
 
-  alias Jarvis2.{Journal, Repo, Runs}
+  alias Jarvis2.{Journal, Repo, Runs, StepRoles}
+  alias Jarvis2.Herdr.Actions
   alias Jarvis2.Herdr.Mirror
-  alias Jarvis2.Kanban.{Card, Feedback, Kind, Prompt, Round, Slides}
+  alias Jarvis2.Kanban.{Card, Feedback, Kind, Prompt, Round, SkillUse, Slides}
   alias Jarvis2.Runs.{Launcher, Run}
 
   def topic, do: "kanban"
@@ -15,7 +16,7 @@ defmodule Jarvis2.Kanban do
 
   def get_card(id) do
     with {:ok, id} <- Ecto.UUID.cast(id), %Card{} = card <- Repo.get(Card, id) do
-      Repo.preload(card, [:run, :rounds, :feedback], in_parallel: false)
+      Repo.preload(card, [:run, :rounds, :feedback, :skill_uses], in_parallel: false)
     else
       _ -> nil
     end
@@ -45,6 +46,52 @@ defmodule Jarvis2.Kanban do
       changed(card, "kanban.created")
       {:ok, card}
     end
+  end
+
+  def report_skill(run_id, name, reason) do
+    with %Card{} = card <- get_card_by_run(run_id),
+         true <- valid_skill_text?(name, 100) and valid_skill_text?(reason, 500) do
+      insert_skill(card.id, run_id, name, reason)
+    else
+      nil -> {:error, "Not a kanban run."}
+      false -> {:error, "Invalid skill name or reason."}
+    end
+  end
+
+  defp insert_skill(card_id, run_id, name, reason) do
+    :global.trans({{__MODULE__, :report_skill, card_id}, self()}, fn ->
+      transaction(
+        fn -> record_skill!(card_id, run_id, name, reason) end,
+        card_id,
+        "kanban.skill"
+      )
+    end)
+  end
+
+  defp valid_skill_text?(text, max) when is_binary(text),
+    do: byte_size(text) <= max and String.valid?(text) and String.trim(text) != ""
+
+  defp valid_skill_text?(_, _), do: false
+
+  defp record_skill!(card_id, run_id, name, reason) do
+    card = Repo.get_by(Card, id: card_id, run_id: run_id)
+    if is_nil(card), do: Repo.rollback("Not a kanban run.")
+
+    count =
+      Repo.aggregate(
+        from(s in SkillUse, where: s.card_id == ^card_id and s.stage == ^card.stage),
+        :count
+      )
+
+    if count >= 50, do: Repo.rollback("Skill report limit reached for this stage.")
+
+    Repo.insert!(%SkillUse{
+      card_id: card_id,
+      run_id: run_id,
+      stage: card.stage,
+      name: name,
+      reason: reason
+    })
   end
 
   def ask_questions(run_id, questions) do
@@ -132,8 +179,11 @@ defmodule Jarvis2.Kanban do
 
     card = Repo.get!(Card, current.card_id)
 
-    if byte_size(Prompt.answers(current, card.stage)) > 6_000,
-      do: Repo.rollback("Answers are too long to deliver; shorten them.")
+    unless Actions.valid_prompt_text?(Prompt.answers(current, card.stage)),
+      do:
+        Repo.rollback(
+          "Answers are invalid or too long to deliver; remove control characters or shorten them."
+        )
 
     transition!(current.card_id, :awaiting_user, :agent)
 
@@ -195,8 +245,16 @@ defmodule Jarvis2.Kanban do
 
     with {:ok, next_stage} <- advanceable(current, card),
          :ok <- availability(),
+         started_at = DateTime.utc_now(),
+         next_card = %{
+           current
+           | stage: next_stage,
+             stage_started_at: started_at,
+             deliverable: nil
+         },
+         {:ok, prepared} <- prepare_run(next_card, nil, false),
          :ok <- write_plan(current.run.cwd, current.deliverable) do
-      advance_transaction(current, next_stage)
+      advance_transaction(current, next_stage, started_at, {:ok, prepared})
     end
   end
 
@@ -223,21 +281,23 @@ defmodule Jarvis2.Kanban do
     end
   end
 
-  defp advance_transaction(card, next_stage) do
+  defp advance_transaction(card, next_stage, started_at, prepared) do
     result =
       Repo.transaction(fn ->
         transition!(card.id, :done, :agent,
           run_id: card.run_id,
           expected_updated_at: card.updated_at,
           stage: next_stage,
-          stage_started_at: DateTime.utc_now(),
+          stage_started_at: started_at,
           accepted_plan: card.deliverable,
           deliverable: nil
         )
 
         mark_stale_delivered(card.id)
         current = get_card(card.id)
-        {:launch, run, _} = created = create_agent!(current, nil, nil, :advance, card.run_id)
+
+        {:launch, run, _} =
+          created = create_agent!(current, nil, nil, :advance, card.run_id, prepared)
 
         Journal.record(%{
           source: :ui,
@@ -341,17 +401,27 @@ defmodule Jarvis2.Kanban do
 
   def reopen(%Card{column: column} = card, text)
       when column in [:done, :archive] and is_binary(text) do
-    text = String.trim(text)
-    changeset = Feedback.changeset(%Feedback{}, %{card_id: card.id, text: text})
-
-    if changeset.valid? do
-      with :ok <- availability(), do: start_or_resume(card, column, text)
-    else
-      {:error, "Feedback is required and must be at most 1000 bytes."}
-    end
+    if Actions.valid_prompt_characters?(text),
+      do: reopen_valid(card, String.trim(text)),
+      else: {:error, "Feedback produces an invalid or oversized prompt."}
   end
 
   def reopen(_, _), do: {:error, "That card cannot be reopened."}
+
+  defp reopen_valid(card, text) do
+    changeset = Feedback.changeset(%Feedback{}, %{card_id: card.id, text: text})
+
+    cond do
+      not changeset.valid? ->
+        {:error, "Feedback is required and must be at most 1000 bytes."}
+
+      not Actions.valid_prompt_text?(Prompt.reopen(text, card.kind, card.stage, card.id)) ->
+        {:error, "Feedback produces an invalid or oversized prompt."}
+
+      true ->
+        with :ok <- availability(), do: start_or_resume(card, card.column, text)
+    end
+  end
 
   defp start_or_resume(card, from, feedback) do
     result =
@@ -420,17 +490,24 @@ defmodule Jarvis2.Kanban do
 
   defp prepare_agent!(card, item, feedback, from), do: create_agent!(card, item, feedback, from)
 
-  defp create_agent!(card, item, feedback, from, parent_run_id \\ nil) do
+  defp create_agent!(card, item, feedback, from, parent_run_id \\ nil, prepared \\ nil) do
     restored = from == :archive
-    session_id = if (restored and card.run) && card.run.kind == "pi", do: card.run.session_id
-    session_id = session_id || Ecto.UUID.generate()
+
+    {role, task} =
+      case prepared || prepare_run(card, feedback, restored) do
+        {:ok, result} -> result
+        {:error, message} -> Repo.rollback(message)
+      end
 
     attrs = %{
       name: String.slice(card.title, 0, 64),
       cwd: card.cwd,
       worktree: card.worktree,
-      task: Prompt.build(card, card.rounds, feedback, restored: restored),
-      session_id: session_id,
+      task: task,
+      role: role.name,
+      model: role.model,
+      thinking: role.effort,
+      session_id: session_id(card, restored),
       parent_run_id: parent_run_id
     }
 
@@ -441,6 +518,25 @@ defmodule Jarvis2.Kanban do
 
       {:error, _} ->
         Repo.rollback("Could not create the run; check its settings.")
+    end
+  end
+
+  defp session_id(%Card{run: %Run{kind: "pi", session_id: id}}, true) when is_binary(id),
+    do: id
+
+  defp session_id(_card, _restored), do: Ecto.UUID.generate()
+
+  defp prepare_run(card, feedback, restored) do
+    with {:ok, role} <- StepRoles.resolve(card.kind, card.stage) do
+      task = Prompt.build(card, card.rounds, feedback, role: role, restored: restored)
+      name = String.slice(card.title, 0, 64)
+      text = Jarvis2.Runs.Prompt.build(%{name: name, task: task})
+
+      if Actions.valid_prompt_characters?(task) and Actions.valid_prompt_text?(text),
+        do: {:ok, {role, task}},
+        else:
+          {:error,
+           "Role #{inspect(role.name)} and required card content produce an invalid prompt or exceed 65536 bytes; shorten the role or card content."}
     end
   end
 

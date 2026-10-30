@@ -41,21 +41,25 @@ defmodule Jarvis2.MCP.Server do
        project: :string
      }},
     {"ask_human",
-     "Ask the human a question; returns a ticket. Poll wait_for_answer until it is no longer pending.",
+     "Ask the human a question in an ad-hoc run; returns a ticket. Poll wait_for_answer until it is no longer pending. For kanban use ask_questions instead.",
      %{prompt: {:required, :string}, options: {:list, :string}}},
     {"request_approval",
-     "Ask the human to approve or deny an action before you take it; returns a ticket for wait_for_answer.",
+     "Ask the human to approve or deny an action in an ad-hoc run; returns a ticket for wait_for_answer. For kanban use ask_questions instead.",
      %{action: {:required, :string}, detail: :string}},
     {"wait_for_answer",
      "Wait up to timeout_s seconds (default 30, max 100) for a ticket's answer.",
      %{ticket: {:required, :string}, timeout_s: :integer}},
     {"ask_questions",
-     "Ask a kanban question round, then end your turn; answers arrive as the next message. Each question has title, body, recommended, and options: up to 6 alternative answers as strings of at most 100 bytes each, excluding the recommendation. Provide alternatives whenever applicable; leave options empty only when there are none. Do not number questions.",
+     "Ask a kanban question round, including decisions or approvals, then end your turn; answers arrive as the next message. Each question has title, body, recommended, and options: up to 6 alternative answers as strings of at most 100 bytes each, excluding the recommendation. Provide alternatives whenever applicable; leave options empty only when there are none. Do not number questions.",
      %{questions: {:required, {:list, :map}}}},
+    {"report_skill",
+     "Report every skill you load for a kanban stage, giving its name (at most 100 bytes) and why you loaded it (at most 500 bytes). This does not end your turn.",
+     %{name: {:required, :string}, reason: {:required, :string}}},
     {"submit_deliverable",
      "Submit the completed kanban deliverable and end your turn. For slides, content is one complete self-contained HTML document.",
      %{content: {:required, :string}}},
-    {"submit_result", "Finish your run with a summary and optional artifact paths or URLs.",
+    {"submit_result",
+     "Finish an ad-hoc run with a summary and optional artifact paths or URLs. For kanban use submit_deliverable instead.",
      %{summary: {:required, :string}, artifacts: {:list, :string}}}
   ]
   @resources ~w(jarvis2://session jarvis2://layout jarvis2://worktrees jarvis2://events/recent jarvis2://journal jarvis2://blackboard)
@@ -132,6 +136,12 @@ defmodule Jarvis2.MCP.Server do
 
   defp journal_args("submit_deliverable", args),
     do: %{content_bytes: bytes_if_binary(args["content"])}
+
+  defp journal_args("report_skill", args),
+    do: %{
+      name_bytes: bytes_if_binary(args["name"]),
+      reason_bytes: bytes_if_binary(args["reason"])
+    }
 
   # Old agents can still attempt the removed tool; its payload must not enter the journal.
   defp journal_args("submit_plan", args), do: %{plan_bytes: bytes_if_binary(args["plan"])}

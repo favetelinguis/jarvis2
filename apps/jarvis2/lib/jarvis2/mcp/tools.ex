@@ -133,6 +133,13 @@ defmodule Jarvis2.MCP.Tools do
     end
   end
 
+  def call("report_skill", args, %{run_id: run_id}) when is_binary(run_id) do
+    with {:ok, _} <- Kanban.report_skill(run_id, value(args, :name), value(args, :reason)),
+         do: {:ok, %{status: "recorded"}}
+  end
+
+  def call("report_skill", _args, _caller), do: {:error, "Not a kanban run."}
+
   def call("submit_deliverable", args, %{run_id: run_id}) when is_binary(run_id) do
     with {:ok, _card} <- Kanban.submit_deliverable(run_id, value(args, :content)),
          do: {:ok, %{status: "done"}}
