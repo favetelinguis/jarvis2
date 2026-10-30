@@ -164,6 +164,156 @@ defmodule Jarvis2.MCPTest do
            )
   end
 
+  test "board endpoint advertises only card creation and refuses other tools", ctx do
+    ctx = Map.put(ctx, :mcp_path, "/mcp/board")
+
+    assert {200, _, %{"result" => %{"capabilities" => capabilities}}} =
+             rpc(ctx, [], %{
+               jsonrpc: "2.0",
+               id: 1,
+               method: "initialize",
+               params: %{
+                 protocolVersion: "2025-11-25",
+                 capabilities: %{},
+                 clientInfo: %{name: "test", version: "1"}
+               }
+             })
+
+    assert Map.has_key?(capabilities, "tools")
+    refute Map.has_key?(capabilities, "resources")
+    {session, protocol} = initialize(ctx)
+    headers = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]
+    rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
+
+    assert {200, _, %{"result" => %{"tools" => [%{"name" => "create_card"}]}}} =
+             rpc(ctx, headers, %{jsonrpc: "2.0", id: 2, method: "tools/list"})
+
+    assert {200, _, %{"error" => _}} =
+             rpc(ctx, headers, %{
+               jsonrpc: "2.0",
+               id: 3,
+               method: "tools/call",
+               params: %{name: "whoami", arguments: %{}}
+             })
+
+    assert {404, _, %{"error" => _}} =
+             rpc(Map.put(ctx, :mcp_path, "/mcp"), headers, %{
+               jsonrpc: "2.0",
+               id: 4,
+               method: "tools/list"
+             })
+
+    assert {403, _, %{"error" => "browser origins are not supported"}} =
+             rpc(ctx, [{"origin", "https://attacker.example"}], %{
+               jsonrpc: "2.0",
+               id: 5,
+               method: "initialize"
+             })
+  end
+
+  test "stateless board requests also expose only the card tool", ctx do
+    ctx = Map.put(ctx, :mcp_path, "/mcp/board")
+    headers = [{"mcp-protocol-version", "2026-07-28"}]
+
+    meta = %{
+      "io.modelcontextprotocol/protocolVersion" => "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities" => %{}
+    }
+
+    assert {200, _, %{"result" => %{"tools" => [%{"name" => "create_card"}]}}} =
+             rpc(ctx, [{"mcp-method", "tools/list"} | headers], %{
+               jsonrpc: "2.0",
+               id: 1,
+               method: "tools/list",
+               params: %{_meta: meta}
+             })
+
+    assert {200, _, %{"error" => _}} =
+             rpc(ctx, [{"mcp-method", "tools/call"}, {"mcp-name", "whoami"} | headers], %{
+               jsonrpc: "2.0",
+               id: 2,
+               method: "tools/call",
+               params: %{_meta: meta, name: "whoami", arguments: %{}}
+             })
+  end
+
+  test "manual sessions create scratch cards for their working directory without a run", ctx do
+    ctx = Map.put(ctx, :mcp_path, "/mcp/board")
+    {session, protocol} = initialize(ctx)
+    headers = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]
+    rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
+
+    {200, _, %{"result" => %{"tools" => tools}}} =
+      rpc(ctx, headers, %{jsonrpc: "2.0", id: 2, method: "tools/list"})
+
+    tool = Enum.find(tools, &(&1["name"] == "create_card"))
+    assert tool
+    assert Enum.sort(tool["inputSchema"]["required"]) == ["cwd", "title"]
+
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, Jarvis2.Kanban.topic())
+    cwd = System.tmp_dir!()
+
+    assert %{"id" => id, "column" => "scratch", "kind" => "plan", "cwd" => ^cwd} =
+             call_tool(ctx, headers, "create_card", %{
+               title: "Private title",
+               body: "Private card details",
+               cwd: cwd
+             })
+
+    card = Jarvis2.Kanban.get_card(id)
+    assert card.title == "Private title"
+    assert card.body == "Private card details"
+    assert card.cwd == cwd
+    assert card.run_id == nil
+    assert_receive {:card, %{id: ^id}}
+
+    event = Enum.find(Jarvis2.Journal.recent(source: :mcp), &(&1.type == "tool.create_card"))
+    refute inspect(event.payload) =~ "Private"
+    assert event.payload["args"]["title_bytes"] == byte_size("Private title")
+    assert event.payload["args"]["body_bytes"] == byte_size("Private card details")
+
+    assert %{"kind" => "research"} =
+             call_tool(ctx, headers, "create_card", %{
+               title: "Research",
+               cwd: cwd,
+               kind: "research"
+             })
+  end
+
+  test "create_card rejects invalid data without creating cards", ctx do
+    ctx = Map.put(ctx, :mcp_path, "/mcp/board")
+    {session, protocol} = initialize(ctx)
+    headers = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]
+    rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
+
+    for args <- [
+          %{title: "Valid", cwd: "relative"},
+          %{title: "Valid", cwd: Path.join(System.tmp_dir!(), Ecto.UUID.generate())},
+          %{title: "", cwd: File.cwd!()},
+          %{title: "Valid", cwd: File.cwd!(), body: String.duplicate("x", 2_001)}
+        ] do
+      assert {200, _, %{"result" => %{"isError" => true}}} =
+               rpc(ctx, headers, %{
+                 jsonrpc: "2.0",
+                 id: 11,
+                 method: "tools/call",
+                 params: %{name: "create_card", arguments: args}
+               })
+    end
+
+    for args <- [%{title: "Missing cwd"}, %{title: "Bad kind", cwd: File.cwd!(), kind: "unknown"}] do
+      assert {200, _, %{"error" => _}} =
+               rpc(ctx, headers, %{
+                 jsonrpc: "2.0",
+                 id: 12,
+                 method: "tools/call",
+                 params: %{name: "create_card", arguments: args}
+               })
+    end
+
+    assert Jarvis2.Kanban.list_cards() == []
+  end
+
   test "invalid tool calls are journalled and browser origins are rejected", ctx do
     assert {403, _, %{"error" => "browser origins are not supported"}} =
              rpc(ctx, [{"origin", "https://attacker.example"}], %{
@@ -633,7 +783,12 @@ defmodule Jarvis2.MCPTest do
     ]
 
     request =
-      Finch.build(:post, "http://127.0.0.1:#{ctx.port}/mcp", headers, Jason.encode!(request))
+      Finch.build(
+        :post,
+        "http://127.0.0.1:#{ctx.port}#{Map.get(ctx, :mcp_path, "/mcp")}",
+        headers,
+        Jason.encode!(request)
+      )
 
     {:ok, response} = Finch.request(request, Jarvis2.MCPTestFinch, receive_timeout: 30_000)
 

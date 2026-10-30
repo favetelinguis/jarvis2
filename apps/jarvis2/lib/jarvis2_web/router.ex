@@ -22,6 +22,7 @@ defmodule Jarvis2Web.Router do
 
   # The MCP endpoint reads its own request body, so no body parser may run before it.
   match :*, "/mcp", Jarvis2Web.MCPPlug, []
+  match :*, "/mcp/board", Jarvis2Web.MCPPlug, server: Jarvis2.MCP.BoardServer
 
   get "/healthz", Jarvis2Web.StatusController, :healthz
   get "/status", Jarvis2Web.StatusController, :status
@@ -41,6 +42,7 @@ defmodule Jarvis2Web.Router do
       live "/events", EventLive
       live "/settings", SettingsLive
       live "/roles", RolesLive
+      live "/harness", HarnessLive
       live "/kanban", KanbanLive.Index, :index
       live "/kanban/cards/:id", KanbanLive.Index, :show
       live "/kanban/cards/:id/answer", KanbanLive.Index, :answer

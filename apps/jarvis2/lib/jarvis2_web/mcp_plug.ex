@@ -12,11 +12,14 @@ defmodule Jarvis2Web.MCPPlug do
   def init(opts), do: opts
 
   @impl true
-  def call(conn, _opts) do
+  def call(conn, opts) do
     if get_req_header(conn, "origin") != [] do
       error(conn, 403, "browser origins are not supported")
     else
-      @mcp.call(conn, @mcp.init(server: Jarvis2.MCP.Server, request_timeout: 120_000))
+      @mcp.call(
+        conn,
+        @mcp.init(server: opts[:server] || Jarvis2.MCP.Server, request_timeout: 120_000)
+      )
     end
   end
 

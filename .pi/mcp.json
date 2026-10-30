@@ -1,22 +1,3 @@
 {
-  "mcpServers": {
-    "jarvis2": {
-      "url": "http://127.0.0.1:4747/mcp",
-      "headers": {
-        "X-Herdr-Pane": "${HERDR_PANE_ID}",
-        "X-Herdr-Workspace": "${HERDR_WORKSPACE_ID}"
-      },
-      "description": "Jarvis2 control plane: identity, blackboard, agent discovery, layouts, events, guarded prompts and spawning, human questions and approvals, and an allow-listed Mix runner.",
-      "exposure": "codemode",
-      "toolExposure": {
-        "whoami": "direct",
-        "notify_human": "direct",
-        "ask_human": "direct",
-        "request_approval": "direct",
-        "wait_for_answer": "direct",
-        "submit_result": "direct"
-      },
-      "timeout": 120
-    }
-  }
+  "mcpServers": {}
 }

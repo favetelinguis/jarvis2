@@ -5,6 +5,15 @@ defmodule Jarvis2.MCP.Server do
   alias Jarvis2.MCP.{Caller, Tools}
   require Logger
 
+  @board_tool {"create_card",
+               "Create a Scratch kanban card for the current Pi session. Summarize the requested work in title and body, and pass the session working directory as an absolute cwd. Defaults to a Plan card; does not start an agent.",
+               %{
+                 title: {:required, :string},
+                 body: :string,
+                 cwd: {:required, :string},
+                 kind: {:enum, Enum.map(Jarvis2.Kanban.Kind.all(), &Atom.to_string/1)}
+               }}
+
   @tools [
     {"whoami", "Resolve your Herdr pane identity.", %{}},
     {"log", "Write a message to the Jarvis2 log; fields are not logged.",
@@ -17,6 +26,7 @@ defmodule Jarvis2.MCP.Server do
      %{key: {:required, :string}, value: :any}},
     {"blackboard_get", "Read a blackboard value.", %{key: {:required, :string}}},
     {"blackboard_list", "List blackboard values.", %{}},
+    @board_tool,
     {"list_agents", "List agents in the session mirror.", %{workspace: :string}},
     {"get_layout", "Inspect the current session layout.",
      %{workspace: :string, format: {:enum, ["tree", "json"]}}},
@@ -67,13 +77,7 @@ defmodule Jarvis2.MCP.Server do
   @impl true
   def init(_client, frame) do
     frame =
-      Enum.reduce(@tools, frame, fn {name, description, schema}, acc ->
-        Frame.register_tool(acc, name,
-          description: description,
-          input_schema: schema,
-          annotations: %{}
-        )
-      end)
+      Enum.reduce(@tools, frame, &register_tool/2)
 
     # Peri treats a required null as missing; MCP requires the key but permits JSON null.
     frame =
@@ -89,11 +93,23 @@ defmodule Jarvis2.MCP.Server do
     {:ok, frame}
   end
 
+  def register_board_tool(frame), do: register_tool(@board_tool, frame)
+
+  defp register_tool({name, description, schema}, frame) do
+    Frame.register_tool(frame, name,
+      description: description,
+      input_schema: schema,
+      annotations: %{}
+    )
+  end
+
   @impl true
-  def handle_request(%{"method" => "tools/call"} = request, frame) do
+  def handle_request(request, frame), do: handle_request(request, frame, __MODULE__)
+
+  def handle_request(%{"method" => "tools/call"} = request, frame, server) do
     caller = Caller.resolve(frame.context.headers)
     frame = Frame.assign(frame, :jarvis2_caller, caller)
-    result = dispatch_tool_request(request, frame)
+    result = dispatch_tool_request(request, frame, server)
 
     name =
       case request do
@@ -129,7 +145,14 @@ defmodule Jarvis2.MCP.Server do
     result
   end
 
-  def handle_request(request, frame), do: Handlers.handle(request, __MODULE__, frame)
+  def handle_request(request, frame, server), do: Handlers.handle(request, server, frame)
+
+  defp journal_args("create_card", args),
+    do: %{
+      title_bytes: bytes_if_binary(args["title"]),
+      body_bytes: bytes_if_binary(args["body"]),
+      cwd_bytes: bytes_if_binary(args["cwd"])
+    }
 
   defp journal_args("ask_questions", args),
     do: %{question_count: length_if_list(args["questions"])}
@@ -166,7 +189,8 @@ defmodule Jarvis2.MCP.Server do
 
   defp dispatch_tool_request(
          %{"params" => %{"name" => "blackboard_put", "arguments" => args}} = request,
-         frame
+         frame,
+         __MODULE__
        )
        when is_map(args) do
     if Map.has_key?(args, "value") do
@@ -176,11 +200,11 @@ defmodule Jarvis2.MCP.Server do
     end
   end
 
-  defp dispatch_tool_request(%{"params" => %{"name" => "blackboard_put"}}, frame),
+  defp dispatch_tool_request(%{"params" => %{"name" => "blackboard_put"}}, frame, __MODULE__),
     do:
       {:error, Anubis.MCP.Error.protocol(:invalid_params, %{message: "value is required"}), frame}
 
-  defp dispatch_tool_request(request, frame), do: Handlers.handle(request, __MODULE__, frame)
+  defp dispatch_tool_request(request, frame, server), do: Handlers.handle(request, server, frame)
 
   @impl true
   def handle_tool_call(name, args, frame) do

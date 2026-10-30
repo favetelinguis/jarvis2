@@ -50,8 +50,32 @@ Pi runs explicitly load `.pi/jarvis2-run.js`, which registers the `jarvis2_run` 
 run's URL and Herdr pane headers, regardless of the run's working directory. Its path is temporarily
 hardcoded to `/home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js`. Pi runs advertise only skills
 from `JARVIS2_SKILLS_DIR`, not skills discovered from the host or the run workspace. Skill instructions
-are loaded on demand. Other Pi sessions can use the
-repository's `.pi/mcp.json` after project trust, or add its `jarvis2` entry to `~/.pi/agent/mcp.json`.
+are loaded on demand. Manual Pi sessions use the separate board integration below.
+
+### Create cards from any Pi session
+
+Open **Harness** and click **Install Pi integration** to add the card-creation tool to Pi's global
+MCP configuration on the machine running Jarvis2. The page shows the target path and preserves
+other servers. It uses `PI_CODING_AGENT_DIR` from Jarvis2's environment when set, otherwise
+`~/.pi/agent`. It replaces the `jarvis2_board` entry when updating, and refuses invalid or
+symlinked configurations.
+
+Alternatively, add this entry under `mcpServers` in `~/.pi/agent/mcp.json` (keep any existing
+entries):
+
+```json
+"jarvis2_board": {
+  "url": "http://127.0.0.1:4747/mcp/board",
+  "description": "Create Jarvis2 kanban cards for the current working directory.",
+  "exposure": "direct"
+}
+```
+
+Use the configured `JARVIS2_PORT` if it differs. Restart Pi or run `/reload` after changing its
+configuration. Jarvis2 must be running. Pi supplies its session working directory explicitly; the
+server requires an existing absolute directory. The card is created in Scratch, defaults to Plan,
+and does not start an agent. Other kinds can be requested. The board endpoint advertises only
+`create_card`; the full unauthenticated `/mcp` endpoint remains available to local processes.
 
 ## Screens
 
@@ -64,12 +88,13 @@ repository's `.pi/mcp.json` after project trust, or add its `jarvis2` entry to `
 | `/events`                         | The journal, filterable by source, type prefix and run                                                                                |
 | `/settings` | Which actions are enabled and defaults for new card agents |
 | `/roles` | Assign roles to card steps and inspect role files |
+| `/harness` | Install the Pi card-creation integration in the global MCP configuration |
 
-Every page except `/login`, `/healthz`, `/status` and `/mcp` needs a session.
+Every page except `/login`, `/healthz`, `/status`, `/mcp` and `/mcp/board` needs a session.
 
 ## MCP tools
 
-The MCP endpoint (`/mcp`, streamable HTTP) is unauthenticated. Run-only tools resolve the active run
+The MCP endpoints (`/mcp` and the one-tool `/mcp/board`, streamable HTTP) are unauthenticated. Run-only tools resolve the active run
 from the pane header. Agent state comes from Herdr; pending questions and approvals appear in `/inbox`, even while Herdr shows the agent as working. Every tool has a UI surface
 or is agent-only:
 
@@ -77,6 +102,7 @@ or is agent-only:
 | -------------------------------------------------- | ----------------------------------------------------------------------- |
 | `whoami`, `log`, `wait_for_event`, `notify_human`  | agent-only (calls appear in `/events`)                                  |
 | `blackboard_put/get/list`                          | `/blackboard`                                                           |
+| `create_card` | creates a Scratch card on `/kanban`; no run identity required |
 | `list_agents`, `get_layout`, `list_worktrees`      | `/`                                                                     |
 | `read_agent`                                       | agent-only                                                              |
 | `prompt_agent`, `spawn_agent`, `run_command`       | `fleet.*` rows in `/events`                                             |
@@ -152,11 +178,12 @@ their deliverable (a plan's Language and Decisions sections), and the implemente
   deletes it. Runs make real changes in that session. Disabled scenario actions are refused;
   `JARVIS2_SCENARIOS` can restrict which actions may be enabled in Settings.
 - **Loopback only.** Bound to `127.0.0.1`; requests with a non-loopback `Host` are refused (DNS rebinding);
-  the LiveView socket checks origin; `/mcp` refuses browser origins. Sign-in uses single-use codes and a
+  the LiveView socket checks origin; both MCP endpoints refuse browser origins. Sign-in uses single-use codes and a
   signed session cookie.
 - **MCP identity is unauthenticated.** `X-Herdr-Pane` selects an active run, including one that has
   submitted a result. Any local process can claim another pane and call MCP tools or answer for its run.
   This also permits asking kanban questions or submitting a deliverable for that pane's card.
+  Any local process can create Scratch cards through MCP without a pane identity.
   A fresh mirror checks the recorded terminal against the pane. Loopback binding, Host and Origin checks,
   scenario gates, execution/prompt guards and rate limits remain in place.
 - **Guarded UI and MCP.** UI run actions act as the system caller `ui` through the execution and prompt

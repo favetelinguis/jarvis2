@@ -51,6 +51,20 @@ defmodule Jarvis2.MCP.Tools do
 
   def call("blackboard_list", _args, _caller), do: {:ok, Jarvis2.Blackboard.list()}
 
+  def call("create_card", args, _caller) do
+    attrs = %{title: value(args, :title), body: value(args, :body), cwd: value(args, :cwd)}
+    attrs = if kind = value(args, :kind), do: Map.put(attrs, :kind, kind), else: attrs
+
+    case Kanban.create_card(attrs) do
+      {:ok, card} ->
+        {:ok, %{id: card.id, column: card.column, kind: card.kind, cwd: card.cwd}}
+
+      {:error, changeset} ->
+        fields = changeset.errors |> Keyword.keys() |> Enum.uniq() |> Enum.join(", ")
+        {:error, "invalid card fields: #{fields}"}
+    end
+  end
+
   def call("list_agents", args, _caller) do
     with {:ok, view} <- fresh_view() do
       workspace = value(args, :workspace)

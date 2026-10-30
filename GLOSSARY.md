@@ -25,6 +25,9 @@ A Markdown file in `roles/` that gives an agent its job, its restrictions and th
 **Skill**:
 Instructions in `skills/<name>/SKILL.md` that an agent loads on demand when its role or the task calls for them.
 
+**Harness**:
+An agent environment, such as Pi, that can connect to Jarvis2 to create cards.
+
 **Run**:
 One Pi agent session started for a card's stage, in its own Herdr tab.
 

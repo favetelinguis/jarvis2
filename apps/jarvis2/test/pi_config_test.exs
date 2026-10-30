@@ -33,17 +33,12 @@ defmodule Jarvis2.PiConfigTest do
     end
   end
 
-  test "Pi project configuration exposes the intended safe tools" do
-    server =
+  test "the project does not add the full run server to manual Pi sessions" do
+    servers =
       File.read!(Path.expand("../../../.pi/mcp.json", __DIR__))
       |> Jason.decode!()
-      |> get_in(["mcpServers", "jarvis2"])
+      |> Map.fetch!("mcpServers")
 
-    assert server["exposure"] == "codemode"
-    assert server["headers"]["X-Herdr-Pane"] == ~S(${HERDR_PANE_ID})
-    refute Map.has_key?(server["headers"], "Authorization")
-    assert server["toolExposure"]["whoami"] == "direct"
-    refute Map.has_key?(server["toolExposure"], "elixir_eval")
-    refute Map.has_key?(server["toolExposure"], "report_status")
+    assert servers == %{}
   end
 end
