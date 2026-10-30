@@ -72,6 +72,9 @@ label.check { display: flex; gap: .6rem; align-items: baseline; }
 .graph-node.related rect { stroke: #2a7de1; stroke-width: 5; }
 .graph-proposal { fill: none; stroke: #2a7de1; stroke-width: 3; stroke-dasharray: 6 4; }
 .graph-proposal.proposal-invalid { stroke: #d9382b; }
+.agents-file-diff span { display: block; }
+.agents-file-diff .diff-del { background: #d9382b44; }
+.agents-file-diff .diff-ins { background: #2e9e5b44; }
 #arrangement-review { display: grid; gap: .5rem; margin: 1rem 0; }
 #arrangement-review label:target { outline: 2px solid #2a7de1; }
 .arrange-emphasis { outline: 2px solid #2a7de1; font-weight: bold; }

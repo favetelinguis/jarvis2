@@ -34,8 +34,15 @@ A card considered by an accepted arrangement while in Scratch, whether or not an
 The project dependency view at `/kanban/graph`.
 
 **Kind**:
-The type of a card (Plan, Research, Explain, Review, Refine, Slides, Architecture, Arrange). It fixes the card's stages, question limit and deliverable type.
+The type of a card (Plan, Research, Explain, Review, Refine, Slides, Architecture, Arrange, Agents file). It fixes the card's stages, question limit and deliverable type.
 _Avoid_: card type, task type
+
+**Agents file**:
+A card Kind whose Deliverable proposes the project's agent context file for human review.
+
+**Context file**:
+`AGENTS.md` or `CLAUDE.md` at the working directory root. Agents file runs read both and propose only `AGENTS.md`.
+_Avoid_: rules file, memory file
 
 **Stage**:
 A phase of a card's work with its own role and deliverable. Only Plan cards have more than one: Planning, then Implementation.
@@ -75,7 +82,7 @@ The interview a role runs with the human before acting, through `ask_questions` 
 How much a role questions the human before acting: NONE, LIGHT, MEDIUM or HEAVY.
 
 **Deliverable**:
-The single result an agent submits for a stage with `submit_deliverable`: a plan, report, review, explanation, refined ticket, slide deck or architecture report.
+The single result an agent submits for a stage with `submit_deliverable`: a plan, report, review, explanation, refined ticket, slide deck, architecture report, dependency proposal or agents file proposal.
 
 **Plan**:
 The Markdown deliverable of the Planning stage. Once accepted it is written to `PLAN.md` for the implementer.

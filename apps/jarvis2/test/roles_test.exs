@@ -117,6 +117,18 @@ defmodule Jarvis2.RolesTest do
     end
   end
 
+  test "agents file writer loads the audit skill and describes the proposal contract" do
+    Application.put_env(:jarvis2, :roles_dir, Path.expand("../../../roles", __DIR__))
+    assert {:ok, role} = Roles.get("agents-file-writer")
+    assert role.prompt =~ "read-only"
+    assert role.prompt =~ "`agents-file`"
+    assert role.prompt =~ "submit_deliverable"
+    root = Path.expand("../../../skills/agents-file", __DIR__)
+
+    for file <- ~w(SKILL.md references/BEST-PRACTICES.md references/TEMPLATE.md),
+        do: assert(File.regular?(Path.join(root, file)))
+  end
+
   test "the architecture report template satisfies the HTML contract" do
     template =
       Path.expand(

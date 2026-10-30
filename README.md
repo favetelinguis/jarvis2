@@ -145,6 +145,8 @@ tab if the planner pane is gone). The accepted plan remains visible alongside th
 Dragging a Done card back to Agent instead reopens its current stage with feedback. Archive and restore
 retain the current stage.
 
+Agents file cards audit root `AGENTS.md` and `CLAUDE.md` and propose a complete `AGENTS.md`. Review the server-computed diff and reasons, then Apply to write it in the run checkout and archive the card; Reopen with feedback to revise it. Jarvis2 never writes `CLAUDE.md`. It rejects changes to either file during the run and changes to `AGENTS.md` after submission.
+
 Research, Explain, Review, Refine, Slides and Architecture have a single stage and instruct the agent not to edit or
 publish changes. Slides delivers a self-contained HTML deck with an in-board preview and browser download. Architecture scans a codebase for deepening opportunities and delivers an HTML report the same way; paste a candidate's "Plan card idea" into a Plan card to design and implement it.
 Planning retains its
@@ -184,7 +186,7 @@ invalid mapped roles prevent a new step from starting. Agents report loaded skil
 the card shows these self-reports by stage, including across reopen and restore. A skill that an agent
 fails to report is not visible. Pi runs receive the skills in `skills/` (`grilling`, `requirements-engineering`, `implement-plan`,
 `grill-me`, `grill-with-docs`, `tdd`, `domain-modeling`, `codebase-design`, `improve-codebase-architecture`, `code-review`, `research`,
-`explain-change`, `slide-deck`, `external-integration-design`) in any working directory.
+`explain-change`, `slide-deck`, `external-integration-design`, `agents-file`) in any working directory.
 
 `GLOSSARY.md` (domain terms) and `docs/adr/` (hard-to-reverse decisions) in the project root are the shared
 language: every role reads them and uses their terms. Read-only roles never edit them; they draft the changes in
@@ -212,6 +214,7 @@ their deliverable (a plan's Language and Decisions sections), and the implemente
   downloads contain a CSP meta and are checked for common external references. The check is not a security
   boundary: a downloaded file runs scripts outside the preview sandbox and can navigate to remote sites. Review
   decks before sharing or opening them, especially on a networked machine.
+- **Agents file Apply.** Apply writes the fixed `AGENTS.md` name (or its in-checkout symlink target) in the run working directory, including worktrees. Fingerprints detect ordinary edits but are not a sandbox or an atomic lock against concurrent external filesystem changes. The agent itself has normal machine access; its read-only restriction is a prompt rule. Review removals and keep backups.
 - **Role files are trusted.** Role prompts are not sandboxed and can instruct an agent to make real
   changes. The model identifier is validated because it reaches a shell command line. A fix subagent
   shares its spawner's checkout; read-only review is a prompt rule, not a sandbox. The `subagents`

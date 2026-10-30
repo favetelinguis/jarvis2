@@ -7,7 +7,9 @@ defmodule Jarvis2.Kanban do
   alias Jarvis2.Herdr.Mirror
 
   alias Jarvis2.Kanban.{
+    AgentsFile,
     Arrange,
+    AtomicFile,
     Card,
     Dependencies,
     Feedback,
@@ -226,6 +228,83 @@ defmodule Jarvis2.Kanban do
     result
   end
 
+  @doc "Record the context file baseline after the checkout is resolved and before the agent starts."
+  def begin_agents_file_run(run_id, cwd) do
+    case Repo.get_by(Card, run_id: run_id, kind: :agents_file, column: :agent) do
+      nil ->
+        :ok
+
+      card ->
+        with {:ok, base} <- AgentsFile.fingerprint(cwd) do
+          save_agents_file_base(card.id, run_id, base)
+        end
+    end
+  end
+
+  defp save_agents_file_base(card_id, run_id, base) do
+    {count, _} =
+      Repo.update_all(
+        from(c in Card, where: c.id == ^card_id and c.run_id == ^run_id and c.column == :agent),
+        set: [agents_file_base: base, updated_at: DateTime.utc_now()]
+      )
+
+    if count == 1, do: :ok, else: {:error, "The card changed; reload it."}
+  end
+
+  def agents_file_review(card), do: AgentsFile.review(card)
+
+  def apply_agents_file(%Card{id: id} = card) do
+    :global.trans({{__MODULE__, :apply_agents_file, id}, self()}, fn ->
+      current = get_card(id)
+
+      cond do
+        is_nil(current) or current.updated_at != card.updated_at ->
+          {:error, "The card changed; reload it."}
+
+        current.kind != :agents_file or current.column != :done ->
+          {:error, "This card cannot be applied."}
+
+        true ->
+          apply_agents_file_current(current)
+      end
+    end)
+  end
+
+  defp apply_agents_file_current(card) do
+    result =
+      Repo.transaction(fn ->
+        transition!(card.id, :done, :archive,
+          run_id: card.run_id,
+          expected_updated_at: card.updated_at
+        )
+
+        stop_if_active!(card.run)
+
+        case AgentsFile.apply!(card) do
+          :ok -> :ok
+          {:error, message} -> Repo.rollback(message)
+        end
+
+        content = Jason.decode!(card.deliverable)["content"]
+
+        Journal.record(%{
+          source: :ui,
+          type: "kanban.agents_file_applied",
+          run_id: card.run_id,
+          payload: %{card_id: card.id, content_bytes: byte_size(content)}
+        })
+
+        Repo.get!(Card, card.id)
+      end)
+
+    case result do
+      {:ok, _} -> broadcast_card(get_card(card.id))
+      _ -> :ok
+    end
+
+    result
+  end
+
   def report_skill(run_id, name, reason) do
     with %Card{} = card <- get_card_by_run(run_id),
          true <- valid_skill_text?(name, 100) and valid_skill_text?(reason, 500) do
@@ -388,11 +467,29 @@ defmodule Jarvis2.Kanban do
     max = Kind.stage(card.kind, card.stage).max_deliverable
 
     cond do
-      not is_binary(content) or String.trim(content) == "" -> {:error, "Invalid deliverable."}
-      byte_size(content) > max -> {:error, "Deliverable exceeds #{max} bytes; shorten it."}
-      Kind.deliverable_type(card.kind) == :html -> Slides.validate(content)
-      card.kind == :arrange -> Arrange.validate(content, card.arrange_snapshot)
-      true -> :ok
+      not is_binary(content) or String.trim(content) == "" ->
+        {:error, "Invalid deliverable."}
+
+      byte_size(content) > max ->
+        {:error, "Deliverable exceeds #{max} bytes; shorten it."}
+
+      Kind.deliverable_type(card.kind) == :html ->
+        Slides.validate(content)
+
+      card.kind == :arrange ->
+        Arrange.validate(content, card.arrange_snapshot)
+
+      card.kind == :agents_file ->
+        with :ok <- AgentsFile.validate(content),
+             %{cwd: cwd} <- card.run do
+          AgentsFile.check_base(cwd, card.agents_file_base)
+        else
+          nil -> {:error, "The card has no agents file run."}
+          error -> error
+        end
+
+      true ->
+        :ok
     end
   end
 
@@ -508,20 +605,10 @@ defmodule Jarvis2.Kanban do
   end
 
   defp write_plan(cwd, content) do
-    target = Path.join(cwd, "PLAN.md")
-    temp = Path.join(cwd, ".PLAN.md-" <> Ecto.UUID.generate())
-
-    result =
-      with {:ok, file} <- File.open(temp, [:write, :exclusive, :binary]),
-           result <- IO.binwrite(file, content),
-           close <- File.close(file),
-           :ok <- result,
-           :ok <- close do
-        File.rename(temp, target)
-      end
-
-    if result != :ok, do: File.rm(temp)
-    if result == :ok, do: :ok, else: {:error, "Could not write PLAN.md in the working directory."}
+    case AtomicFile.write(Path.join(cwd, "PLAN.md"), content) do
+      :ok -> :ok
+      _ -> {:error, "Could not write PLAN.md in the working directory."}
+    end
   end
 
   defp placement(%Run{tab_id: tab_id} = run) when is_binary(tab_id) and tab_id != "" do
@@ -699,7 +786,14 @@ defmodule Jarvis2.Kanban do
 
   defp prepare_agent!(%Card{run: %Run{} = run} = card, item, feedback, from)
        when from != :archive do
-    if Run.active?(run), do: {:resume, item}, else: create_agent!(card, item, feedback, from)
+    if Run.active?(run) do
+      case begin_agents_file_run(run.id, run.cwd) do
+        :ok -> {:resume, item}
+        {:error, message} -> Repo.rollback(message)
+      end
+    else
+      create_agent!(card, item, feedback, from)
+    end
   end
 
   defp prepare_agent!(card, item, feedback, from), do: create_agent!(card, item, feedback, from)
@@ -727,7 +821,10 @@ defmodule Jarvis2.Kanban do
 
     case Runs.create_run(attrs) do
       {:ok, run} ->
-        Repo.update_all(from(c in Card, where: c.id == ^card.id), set: [run_id: run.id])
+        Repo.update_all(from(c in Card, where: c.id == ^card.id),
+          set: [run_id: run.id, agents_file_base: nil]
+        )
+
         {:launch, run, item}
 
       {:error, _} ->

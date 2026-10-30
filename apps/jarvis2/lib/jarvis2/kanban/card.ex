@@ -22,6 +22,7 @@ defmodule Jarvis2.Kanban.Card do
     field :stage_started_at, :utc_datetime_usec
     field :arranged_at, :utc_datetime_usec
     field :arrange_snapshot, :map
+    field :agents_file_base, :map
     belongs_to :run, Jarvis2.Runs.Run, type: :binary_id
     has_many :rounds, Jarvis2.Kanban.Round
     has_many :feedback, Jarvis2.Kanban.Feedback

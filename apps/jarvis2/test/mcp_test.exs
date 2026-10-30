@@ -331,6 +331,7 @@ defmodule Jarvis2.MCPTest do
     tool = Enum.find(tools, &(&1["name"] == "create_card"))
     assert tool
     assert Enum.sort(tool["inputSchema"]["required"]) == ["cwd", "title"]
+    assert "agents_file" in tool["inputSchema"]["properties"]["kind"]["enum"]
 
     Phoenix.PubSub.subscribe(Jarvis2.PubSub, Jarvis2.Kanban.topic())
     cwd = System.tmp_dir!()
@@ -360,6 +361,15 @@ defmodule Jarvis2.MCPTest do
                cwd: cwd,
                kind: "research"
              })
+
+    assert %{"id" => id, "kind" => "agents_file"} =
+             call_tool(ctx, headers, "create_card", %{
+               title: "Audit context",
+               cwd: cwd,
+               kind: "agents_file"
+             })
+
+    assert Jarvis2.Kanban.get_card(id).kind == :agents_file
   end
 
   test "create_card rejects invalid data without creating cards", ctx do

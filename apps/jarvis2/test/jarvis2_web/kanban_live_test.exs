@@ -454,6 +454,39 @@ defmodule Jarvis2Web.KanbanLiveTest do
     assert Kanban.get_card(card.id).column == :archive
   end
 
+  test "agents file review shows the real diff and applies only fresh proposals", %{conn: conn} do
+    dir = Path.join(System.tmp_dir!(), "agents-ui-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    File.write!(Path.join(dir, "AGENTS.md"), "remove me\n")
+    {:ok, card} = Kanban.create_card(%{title: "Audit", cwd: dir, kind: :agents_file})
+    {:ok, run} = Runs.create_run(%{name: "writer", task: "test", cwd: dir})
+    run |> Ecto.Changeset.change(status: :stopped) |> Repo.update!()
+    card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
+    assert :ok = Kanban.begin_agents_file_run(run.id, dir)
+    proposal = Jason.encode!(%{content: "keep me\n", changes: []})
+    assert {:ok, _} = Kanban.submit_deliverable(run.id, proposal)
+    {:ok, view, _} = live(conn, "/kanban/cards/#{card.id}")
+    assert has_element?(view, "#agents-file-review", "Removes 1 lines, adds 1")
+    assert has_element?(view, ".diff-del", "-remove me")
+    assert has_element?(view, ".diff-ins", "+keep me")
+    assert has_element?(view, "#agents-file-review button", "Apply to #{dir}/AGENTS.md")
+    File.write!(Path.join(dir, "AGENTS.md"), "outside\n")
+    {:ok, stale, _} = live(conn, "/kanban/cards/#{card.id}")
+    assert has_element?(stale, ".banner-warn", "changed")
+    refute has_element?(stale, "#agents-file-review button", "Apply")
+    view |> element("#agents-file-review button", "Apply") |> render_click()
+    assert has_element?(view, ".banner-warn", "changed")
+    refute has_element?(view, "#agents-file-review button", "Apply")
+    assert Kanban.get_card(card.id).column == :done
+    assert File.read!(Path.join(dir, "AGENTS.md")) == "outside\n"
+    File.write!(Path.join(dir, "AGENTS.md"), "remove me\n")
+    {:ok, fresh, _} = live(conn, "/kanban/cards/#{card.id}")
+    fresh |> element("#agents-file-review button", "Apply") |> render_click()
+    assert Kanban.get_card(card.id).column == :archive
+    assert File.read!(Path.join(dir, "AGENTS.md")) == "keep me\n"
+  end
+
   defp assert_eventually(fun, attempts \\ 100) do
     cond do
       fun.() ->

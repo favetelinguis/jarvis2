@@ -469,7 +469,13 @@ defmodule Jarvis2Web.KanbanLive.Index do
             card={@card}
             graph={@dependency_graphs[@card.cwd]}
           />
-          <section :if={@card.deliverable && @card.kind != :arrange}>
+          <.live_component
+            :if={@card.kind == :agents_file && @card.column == :done}
+            module={Jarvis2Web.KanbanLive.AgentsFileReview}
+            id={"agents-file-review-#{@card.id}"}
+            card={@card}
+          />
+          <section :if={@card.deliverable && @card.kind not in [:arrange, :agents_file]}>
             <h3>{String.capitalize(Kind.noun(@card.kind, @card.stage))}</h3>
             <%= if Kind.deliverable_type(@card.kind) == :html do %>
               <.slides_viewer :if={@card.column in [:done, :archive]} card={@card} />

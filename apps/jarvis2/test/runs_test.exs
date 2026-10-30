@@ -138,6 +138,55 @@ defmodule Jarvis2.RunsTest do
     assert_eventually(fn -> Runs.get_run(card.run_id).status == :working end)
   end
 
+  test "agents file launch fingerprints the resolved worktree before agent.start", ctx do
+    checkout = Path.join(ctx.cwd, "checkout")
+    File.mkdir_p!(checkout)
+    File.write!(Path.join(ctx.cwd, "AGENTS.md"), "main")
+    File.write!(Path.join(checkout, "AGENTS.md"), "worktree")
+
+    Agent.update(
+      ctx.behavior,
+      &Map.put(
+        &1,
+        "worktree.list",
+        {:reply,
+         %{
+           worktrees: [
+             %{path: ctx.cwd, is_linked_worktree: false, open_workspace_id: "w1"},
+             %{
+               path: checkout,
+               branch: "feature",
+               is_linked_worktree: true,
+               open_workspace_id: "w1"
+             }
+           ]
+         }}
+      )
+    )
+
+    {:ok, card} =
+      Jarvis2.Kanban.create_card(%{
+        title: "Audit",
+        kind: :agents_file,
+        cwd: ctx.cwd,
+        worktree: "feature"
+      })
+
+    assert {:ok, started} = Jarvis2.Kanban.move(card, :agent)
+    assert_receive {:request, "agent.start", _}, 3_000
+    assert {:ok, base} = Jarvis2.Kanban.AgentsFile.fingerprint(checkout)
+    assert Jarvis2.Kanban.get_card(card.id).agents_file_base == base
+    assert_eventually(fn -> Runs.get_run(started.run_id).status == :working end)
+    assert Runs.get_run(started.run_id).cwd == checkout
+    File.write!(Path.join(ctx.cwd, "AGENTS.md"), "changed main")
+
+    assert {:ok, _} =
+             Jarvis2.Kanban.submit_deliverable(
+               started.run_id,
+               Jason.encode!(%{content: "proposal", changes: []})
+             )
+  end
+
   test "a multibyte role reaches the exact final prompt limit", ctx do
     role_dir = Path.join(ctx.cwd, "roles")
     File.mkdir_p!(role_dir)

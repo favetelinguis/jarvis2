@@ -107,7 +107,8 @@ defmodule Jarvis2.Runs do
 
   # The first prompt can reach MCP before agent.prompt returns. Publish the parent's
   # identity first, while keeping it in :starting until launch completes.
-  defp record_launch_pane(%Run{spawned_by_run_id: nil}, :pane, _info), do: :ok
+  defp record_launch_pane(%Run{spawned_by_run_id: nil} = run, :pane, info),
+    do: Jarvis2.Kanban.begin_agents_file_run(run.id, info.cwd)
 
   defp record_launch_pane(%Run{spawned_by_run_id: nil} = run, :agent, info) do
     progress(get_run(run.id), info)

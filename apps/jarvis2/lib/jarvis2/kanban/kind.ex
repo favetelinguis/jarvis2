@@ -103,6 +103,22 @@ defmodule Jarvis2.Kanban.Kind do
         }
       ]
     },
+    agents_file: %{
+      label: "Agents file",
+      hint: "Leave blank to audit and refresh, or say what to change",
+      max_questions: 3,
+      max_body: 4_000,
+      deliverable: :agents_file,
+      stages: [
+        %{
+          name: :main,
+          noun: "agents file proposal",
+          advance: nil,
+          max_deliverable: 60_000,
+          role: "agents-file-writer"
+        }
+      ]
+    },
     arrange: %{
       label: "Arrange",
       hint: "Created from the graph page",
@@ -136,7 +152,19 @@ defmodule Jarvis2.Kanban.Kind do
     }
   }
 
-  def all, do: [:plan, :research, :explain, :review, :refine, :slides, :architecture, :arrange]
+  def all,
+    do: [
+      :plan,
+      :research,
+      :explain,
+      :review,
+      :refine,
+      :slides,
+      :architecture,
+      :arrange,
+      :agents_file
+    ]
+
   def creatable, do: all() -- [:arrange]
   def get(kind), do: Map.fetch!(@kinds, kind)
   def deliverable_type(kind), do: Map.get(get(kind), :deliverable, :markdown)
