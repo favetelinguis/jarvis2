@@ -43,9 +43,10 @@ defmodule Jarvis2.Automations.TestLoop do
     entry = Map.get(state.panes, pane, %{status: nil, failures: 0, last: nil})
     state = put_pane(state, pane, %{entry | status: status})
 
-    if entry.status == "working" and status in ["idle", "done"],
-      do: {:noreply, maybe_run(state, pane, entry)},
-      else: {:noreply, state}
+    if entry.status == "working" and status in ["idle", "done"] and
+         not Jarvis2.Subagents.pane?(pane),
+       do: {:noreply, maybe_run(state, pane, entry)},
+       else: {:noreply, state}
   end
 
   def handle_info({:jarvis2, "herdr:pane.closed", %{data: %{"pane_id" => pane}}}, state)

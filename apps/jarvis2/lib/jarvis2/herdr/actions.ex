@@ -42,7 +42,7 @@ defmodule Jarvis2.Herdr.Actions do
       not valid_prompt?(target, text, wait) ->
         {:error, %{code: "invalid_prompt"}}
 
-      not enabled?(:agent_prompt) and not match?(%{system: "ui", run_id: _}, caller) ->
+      not enabled?(:agent_prompt) and not run_launcher?(caller) ->
         disabled()
 
       true ->
@@ -86,6 +86,12 @@ defmodule Jarvis2.Herdr.Actions do
         end
     end
   end
+
+  defp run_launcher?(%{system: system, run_id: id})
+       when system in ["ui", "subagent"] and is_binary(id),
+       do: true
+
+  defp run_launcher?(_), do: false
 
   @agent_kinds ~w(pi claude codex gemini cursor devin agy cline omp mastracode opencode copilot kimi kiro droid amp grok hermes kilo qodercli qwen letta maki muse)
 

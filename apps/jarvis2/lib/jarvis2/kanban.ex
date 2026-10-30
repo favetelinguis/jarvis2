@@ -234,6 +234,14 @@ defmodule Jarvis2.Kanban do
       card.id,
       "kanban.deliverable"
     )
+    |> case do
+      {:ok, _} = result ->
+        Jarvis2.Subagents.stop_all(run_id)
+        result
+
+      error ->
+        error
+    end
   end
 
   def advance(%Card{id: id} = card) do

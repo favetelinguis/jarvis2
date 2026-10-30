@@ -109,6 +109,7 @@ or is agent-only:
 | `run_mix` | job data in the `runs` table; calls appear in `/events` |
 | `ask_human`, `request_approval`, `wait_for_answer` | `/inbox` and `/events` (run pane only) |
 | `submit_result` | agent-only; calls appear in `/events` (run pane only) |
+| `spawn_subagent`, `wait_for_subagent` | run-only fix review; calls appear in `/events` |
 | `ask_questions`, `submit_deliverable`, `report_skill` | kanban card (kanban run pane only)                                |
 
 Resources: `jarvis2://session`, `layout` and `worktrees` (dashboard), `events/recent` and `journal`
@@ -161,6 +162,7 @@ The name must match the filename stem, use lowercase letters, digits and single 
 most 64 bytes. Model and effort are optional; Settings supplies omitted values. Effort is one of
 `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Unknown frontmatter keys are ignored.
 Jarvis2 appends one shared "Working with the human" section (questions, results, skill reports) to every role prompt, so role files hold only the job, its restrictions and which skills to load, in order. Domain detail lives in `skills/<name>/SKILL.md`.
+The `fix` role is opted into subagent spawning with `subagent: true`; other roles are not eligible by default.
 Role instructions govern the agent's job and any restrictions; they are not a sandbox. Missing or
 invalid mapped roles prevent a new step from starting. Agents report loaded skills with `report_skill`;
 the card shows these self-reports by stage, including across reopen and restore. A skill that an agent
@@ -182,7 +184,7 @@ their deliverable (a plan's Language and Decisions sections), and the implemente
   signed session cookie.
 - **MCP identity is unauthenticated.** `X-Herdr-Pane` selects an active run, including one that has
   submitted a result. Any local process can claim another pane and call MCP tools or answer for its run.
-  This also permits asking kanban questions or submitting a deliverable for that pane's card.
+  This also permits asking kanban questions, submitting a deliverable, or starting model-spending subagents when enabled.
   Any local process can create Scratch cards through MCP without a pane identity.
   A fresh mirror checks the recorded terminal against the pane. Loopback binding, Host and Origin checks,
   scenario gates, execution/prompt guards and rate limits remain in place.
@@ -195,7 +197,9 @@ their deliverable (a plan's Language and Decisions sections), and the implemente
   boundary: a downloaded file runs scripts outside the preview sandbox and can navigate to remote sites. Review
   decks before sharing or opening them, especially on a networked machine.
 - **Role files are trusted.** Role prompts are not sandboxed and can instruct an agent to make real
-  changes. The model identifier is validated because it reaches a shell command line.
+  changes. The model identifier is validated because it reaches a shell command line. A fix subagent
+  shares its spawner's checkout; read-only review is a prompt rule, not a sandbox. The `subagents`
+  scenario is disabled by default and can be restricted by `JARVIS2_SCENARIOS`.
 - **Redaction.** Prompt, command and summary text, blackboard values and matched output lines are never stored in
   the journal (only their sizes); credential-looking keys and bearer strings are masked.
 
@@ -230,7 +234,8 @@ mix test                     # umbrella: herdr_client + jarvis2
 mix format --check-formatted
 mix compile --warnings-as-errors
 mix credo                    # reports existing findings in the guarded-execution code
-scripts/live-tour.sh         # end-to-end check against an isolated Herdr session and a mock model
+scripts/live-tour.sh         # automation tour against an isolated Herdr session and a mock model
+TOUR=review scripts/live-tour.sh  # normal and blocked fix-review flows (isolated test database)
 ```
 
 Layout: `apps/herdr_client` (socket client and a fake Herdr for tests) and `apps/jarvis2` (contexts under

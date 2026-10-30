@@ -4,7 +4,7 @@ defmodule Jarvis2.Roles do
 
   defmodule Role do
     @moduledoc false
-    defstruct [:name, :description, :model, :effort, :prompt]
+    defstruct [:name, :description, :model, :effort, :prompt, subagent: false]
   end
 
   def dir, do: Application.fetch_env!(:jarvis2, :roles_dir)
@@ -68,6 +68,7 @@ defmodule Jarvis2.Roles do
     prompt = String.trim(body)
 
     with :ok <- validate_header(data, file),
+         :ok <- validate_subagent(data),
          true <- prompt != "" || {:error, "prompt body is empty"} do
       {:ok,
        %Role{
@@ -75,7 +76,8 @@ defmodule Jarvis2.Roles do
          description: data["description"],
          model: data["model"],
          effort: data["effort"],
-         prompt: prompt
+         prompt: prompt,
+         subagent: Map.get(data, "subagent", false)
        }}
     end
   end
@@ -105,6 +107,12 @@ defmodule Jarvis2.Roles do
       true ->
         :ok
     end
+  end
+
+  defp validate_subagent(data) do
+    if is_boolean(Map.get(data, "subagent", false)),
+      do: :ok,
+      else: {:error, "subagent must be a boolean"}
   end
 
   defp valid_name?(name) when is_binary(name) do

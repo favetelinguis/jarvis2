@@ -39,6 +39,10 @@ defmodule Jarvis2.MCP.Server do
      %{agent: {:required, :string}, text: {:required, :string}, wait: :boolean}},
     {"spawn_agent", "Create a sibling agent in the caller's cwd; guarded.",
      %{name: {:required, :string}, kind: {:required, :string}, cwd: :string, prompt: :string}},
+    {"spawn_subagent", "Start a review subagent beside your run.",
+     %{role: {:required, :string}, task: {:required, :string}}},
+    {"wait_for_subagent", "Wait for your subagent's result, up to 100 seconds.",
+     %{id: {:required, :string}, timeout_s: :integer}},
     {"run_command", "Run a shell command in a new sibling pane; guarded and not sandboxed.",
      %{command: {:required, :string}, wait_for: :string, timeout_s: :integer}},
     {"wait_for_event",
@@ -152,6 +156,32 @@ defmodule Jarvis2.MCP.Server do
       title_bytes: bytes_if_binary(args["title"]),
       body_bytes: bytes_if_binary(args["body"]),
       cwd_bytes: bytes_if_binary(args["cwd"])
+    }
+
+  defp journal_args("spawn_subagent", args),
+    do: %{role_bytes: bytes_if_binary(args["role"]), task_bytes: bytes_if_binary(args["task"])}
+
+  defp journal_args("wait_for_subagent", args) do
+    id =
+      case Ecto.UUID.cast(args["id"]) do
+        {:ok, uuid} -> uuid
+        :error -> nil
+      end
+
+    timeout = if is_integer(args["timeout_s"]), do: args["timeout_s"]
+    %{id: id, timeout_s: timeout}
+  end
+
+  defp journal_args("request_approval", args),
+    do: %{
+      action_bytes: bytes_if_binary(args["action"]),
+      detail_bytes: bytes_if_binary(args["detail"])
+    }
+
+  defp journal_args("submit_result", args),
+    do: %{
+      summary_bytes: bytes_if_binary(args["summary"]),
+      artifact_count: length_if_list(args["artifacts"])
     }
 
   defp journal_args("ask_questions", args),

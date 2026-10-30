@@ -99,15 +99,19 @@ defmodule Jarvis2.MCP.Tools do
   end
 
   def call("ask_human", args, %{run_id: run_id}) when is_binary(run_id) do
-    ask(run_id, :question, %{prompt: value(args, :prompt), options: value(args, :options) || []})
+    with :ok <- human_allowed(run_id) do
+      ask(run_id, :question, %{prompt: value(args, :prompt), options: value(args, :options) || []})
+    end
   end
 
   def call("request_approval", args, %{run_id: run_id}) when is_binary(run_id) do
-    ask(run_id, :approval, %{
-      prompt: value(args, :action),
-      detail: value(args, :detail),
-      options: ["approve", "deny"]
-    })
+    with :ok <- human_allowed(run_id) do
+      ask(run_id, :approval, %{
+        prompt: value(args, :action),
+        detail: value(args, :detail),
+        options: ["approve", "deny"]
+      })
+    end
   end
 
   def call("wait_for_answer", args, %{run_id: run_id}) when is_binary(run_id) do
@@ -127,13 +131,19 @@ defmodule Jarvis2.MCP.Tools do
     summary = value(args, :summary)
     artifacts = value(args, :artifacts) || []
 
-    if byte_size(summary) in 1..2_000 and length(artifacts) <= 20 and
-         Enum.all?(artifacts, &(byte_size(&1) <= 500)) do
-      with {:ok, run} <- Runs.submit_result(run_id, summary, artifacts),
-           do: {:ok, %{run: run.id, status: run.status}}
-    else
-      {:error, "summary or artifacts are invalid or too long"}
-    end
+    with {:ok, run} <- Runs.submit_result(run_id, summary, artifacts),
+         do: {:ok, %{run: run.id, status: run.status}}
+  end
+
+  def call("spawn_subagent", args, %{run_id: run_id} = caller) when is_binary(run_id),
+    do: Fleet.spawn_subagent(caller, value(args, :role), value(args, :task))
+
+  def call("wait_for_subagent", args, %{run_id: run_id}) when is_binary(run_id) do
+    timeout = value(args, :timeout_s) || 30
+
+    if is_integer(timeout) and timeout in 1..100,
+      do: Jarvis2.Subagents.wait(value(args, :id), run_id, timeout * 1_000),
+      else: {:error, "timeout_s must be between 1 and 100 seconds"}
   end
 
   def call("ask_questions", args, %{run_id: run_id}) when is_binary(run_id) do
@@ -160,7 +170,7 @@ defmodule Jarvis2.MCP.Tools do
   end
 
   def call(name, _args, _caller)
-      when name in ~w(ask_human request_approval wait_for_answer submit_result ask_questions submit_deliverable),
+      when name in ~w(ask_human request_approval wait_for_answer submit_result ask_questions submit_deliverable spawn_subagent wait_for_subagent),
       do: {:error, "no run for this pane"}
 
   def call("notify_human", args, caller) do
@@ -275,6 +285,13 @@ defmodule Jarvis2.MCP.Tools do
     case view() do
       %{stale: false, snapshot: snapshot} = view when is_map(snapshot) -> {:ok, view}
       _ -> {:error, "Herdr mirror is unavailable or stale"}
+    end
+  end
+
+  defp human_allowed(run_id) do
+    case Runs.get_run(run_id) do
+      %{spawned_by_run_id: id} when is_binary(id) -> {:error, "subagents cannot ask the human"}
+      _ -> :ok
     end
   end
 

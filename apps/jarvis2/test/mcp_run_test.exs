@@ -281,6 +281,124 @@ defmodule Jarvis2.MCPRunTest do
     refute inspect(Journal.recent()) =~ "secret"
   end
 
+  test "subagent MCP results are private, scoped and refuse human questions", ctx do
+    config(:live_scenarios, [])
+
+    {:ok, child} =
+      Runs.create_run(%{
+        name: "fix",
+        role: "fix",
+        task: "review",
+        cwd: File.cwd!(),
+        spawned_by_run_id: ctx.run.id
+      })
+
+    child
+    |> Run.progress_changeset(%{status: :working, pane_id: "w1:p8", terminal_id: "term-other"})
+    |> Repo.update!()
+
+    parent_session = start_session(ctx, "w1:p9")
+    child_session = start_session(ctx, "w1:p8")
+
+    assert {:error, "subagents cannot ask the human"} =
+             call_error(ctx, child_session, "ask_human", %{prompt: "private question"})
+
+    assert {:error, "subagents cannot ask the human"} =
+             call_error(ctx, child_session, "request_approval", %{action: "private action"})
+
+    assert {:error, "subagents are disabled"} =
+             call_error(ctx, parent_session, "spawn_subagent", %{
+               role: "fix",
+               task: "private review request"
+             })
+
+    assert {:error, "no such subagent"} =
+             call_error(ctx, child_session, "wait_for_subagent", %{id: child.id, timeout_s: 1})
+
+    assert {:error, "no such subagent"} =
+             call_error(ctx, parent_session, "wait_for_subagent", %{
+               id: "private invalid id",
+               timeout_s: 1
+             })
+
+    assert {:error, "summary exceeds 32768 bytes; shorten it"} =
+             call_error(ctx, child_session, "submit_result", %{
+               summary: String.duplicate("x", 32_769)
+             })
+
+    assert %{"status" => "done"} =
+             call(ctx, child_session, "submit_result", %{summary: "private finding"})
+
+    Runs.get_run(child.id) |> Run.progress_changeset(%{status: :finished}) |> Repo.update!()
+
+    assert %{"status" => "finished", "result" => result} =
+             call(ctx, parent_session, "wait_for_subagent", %{id: child.id, timeout_s: 1})
+
+    assert result =~ "private finding"
+
+    assert Enum.any?(Journal.recent(), fn event ->
+             event.type == "tool.submit_result" and event.run_id == child.id and
+               event.payload["args"]["summary_bytes"] == byte_size("private finding")
+           end)
+
+    refute inspect(Journal.recent()) =~ "private finding"
+    refute inspect(Journal.recent()) =~ "private review request"
+    refute inspect(Journal.recent()) =~ "private question"
+    refute inspect(Journal.recent()) =~ "private action"
+    refute inspect(Journal.recent()) =~ "private invalid id"
+  end
+
+  test "a spawner can route a blocked subagent report to the board", ctx do
+    {:ok, card} = Jarvis2.Kanban.create_card(%{title: "Implement", cwd: File.cwd!(), kind: :plan})
+
+    card
+    |> Ecto.Changeset.change(column: :agent, stage: :implementation, run_id: ctx.run.id)
+    |> Repo.update!()
+
+    {:ok, child} =
+      Runs.create_run(%{
+        name: "fix",
+        role: "fix",
+        task: "review",
+        cwd: File.cwd!(),
+        spawned_by_run_id: ctx.run.id
+      })
+
+    child
+    |> Run.progress_changeset(%{status: :working, pane_id: "w1:p8", terminal_id: "term-other"})
+    |> Repo.update!()
+
+    parent_session = start_session(ctx, "w1:p9")
+    child_session = start_session(ctx, "w1:p8")
+
+    assert %{"status" => "done"} =
+             call(ctx, child_session, "submit_result", %{
+               summary:
+                 "Verdict: blocked\n[blocker] Which format? | requirement conflicts | recommend A | B"
+             })
+
+    Runs.get_run(child.id) |> Run.progress_changeset(%{status: :finished}) |> Repo.update!()
+
+    assert %{"status" => "finished", "result" => report} =
+             call(ctx, parent_session, "wait_for_subagent", %{id: child.id, timeout_s: 1})
+
+    assert report =~ "Verdict: blocked"
+
+    assert %{"status" => "awaiting_user"} =
+             call(ctx, parent_session, "ask_questions", %{
+               questions: [
+                 %{
+                   title: "Which format?",
+                   body: "requirement conflicts",
+                   recommended: "A",
+                   options: ["B"]
+                 }
+               ]
+             })
+
+    assert %{column: :awaiting_user, stage: :implementation} = Jarvis2.Kanban.get_card(card.id)
+  end
+
   test "removed submit_plan is rejected without journalling its text", ctx do
     session = start_session(ctx, ctx.pane)
 

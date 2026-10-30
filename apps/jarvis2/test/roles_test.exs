@@ -32,6 +32,18 @@ defmodule Jarvis2.RolesTest do
     assert role.prompt == body
   end
 
+  test "subagent capability must be explicitly true", %{dir: dir} do
+    File.write!(Path.join(dir, "ordinary.md"), "---\nname: ordinary\n---\nbody")
+    File.write!(Path.join(dir, "fix.md"), "---\nname: fix\nsubagent: true\n---\nbody")
+    File.write!(Path.join(dir, "bad.md"), "---\nname: bad\nsubagent: yes\n---\nbody")
+
+    assert {:ok, ordinary} = Roles.get("ordinary")
+    refute ordinary.subagent
+    assert {:ok, fix} = Roles.get("fix")
+    assert fix.subagent
+    assert {:error, _} = Roles.get("bad")
+  end
+
   test "reports invalid files without crashing", %{dir: dir} do
     for {file, content} <- [
           {"wrong.md", "---\nname: other\n---\nbody"},
@@ -56,6 +68,10 @@ defmodule Jarvis2.RolesTest do
   test "shipped roles cover all defaults" do
     Application.put_env(:jarvis2, :roles_dir, Path.expand("../../../roles", __DIR__))
     assert Enum.all?(Roles.list(), &match?({:ok, _}, &1))
+
+    assert {:ok, %{subagent: true, effort: "medium", prompt: fix_prompt}} = Roles.get("fix")
+    assert fix_prompt =~ "submit_result"
+    assert fix_prompt =~ "ask_questions"
 
     for {kind, stage} <- StepRoles.steps() do
       assert {:ok, role} = Roles.get(Jarvis2.Kanban.Kind.stage(kind, stage).role)

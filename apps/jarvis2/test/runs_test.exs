@@ -63,6 +63,16 @@ defmodule Jarvis2.RunsTest do
       assert id == run.id
     end
 
+    test "stores the spawner separately from the previous-stage parent", %{cwd: cwd} do
+      {:ok, spawner} = Runs.create_run(%{name: "parent", task: "work", cwd: cwd})
+
+      {:ok, child} =
+        Runs.create_run(%{name: "child", task: "review", cwd: cwd, spawned_by_run_id: spawner.id})
+
+      assert Runs.get_run(child.id).spawned_by_run_id == spawner.id
+      assert child.parent_run_id == nil
+    end
+
     test "validates user input", %{cwd: cwd} do
       attrs = %{name: "demo", task: "x", cwd: cwd}
 
@@ -211,6 +221,13 @@ defmodule Jarvis2.RunsTest do
     assert {:ok, run} = Runs.create_run(%{name: name, task: task, cwd: cwd})
     assert byte_size(Jarvis2.Runs.Prompt.build(run)) == 65_536
     assert {:error, _} = Runs.create_run(%{name: name, task: task <> "x", cwd: cwd})
+  end
+
+  test "the real fix role and a maximum-size task fit the complete run prompt" do
+    assert {:ok, role} = Jarvis2.Roles.get("fix")
+    task = Jarvis2.Subagents.Prompt.build(role, String.duplicate("x", 32_768))
+    prompt = Jarvis2.Runs.Prompt.build(%{name: "fix", task: task})
+    assert Jarvis2.Herdr.Actions.valid_prompt_text?(prompt)
   end
 
   test "role presentation failures are cosmetic and legacy runs do not set them", ctx do
@@ -498,6 +515,475 @@ defmodule Jarvis2.RunsTest do
     :ok = GenServer.call(mirror, {:put, view()})
     assert {:ok, :gone} = Launcher.close(run)
     refute_receive {:request, "tab.close", _}, 50
+  end
+
+  test "subagent pane cleanup never closes the shared tab and verifies the terminal", ctx do
+    {:ok, parent} = Runs.create_run(%{name: "parent", task: "work", cwd: ctx.cwd})
+
+    {:ok, child} =
+      Runs.create_run(%{name: "fix", task: "review", cwd: ctx.cwd, spawned_by_run_id: parent.id})
+
+    child = %{child | pane_id: "w1:p9", tab_id: "w1:t2", terminal_id: "term-run"}
+    :ok = GenServer.call(ctx.mirror, {:put, with_run_pane("idle")})
+    assert {:ok, :closed} = Launcher.close_pane(child)
+    assert_receive {:request, "pane.close", %{"pane_id" => "w1:p9"}}
+    refute_receive {:request, "tab.close", _}, 50
+
+    assert {:ok, :gone} = Launcher.close_pane(%{child | terminal_id: "another-terminal"})
+    refute_receive {:request, "pane.close", _}, 50
+
+    child = child |> Run.progress_changeset(%{status: :working}) |> Repo.update!()
+    assert {:ok, %{status: :stopped}} = Runs.stop_run(child)
+    assert_receive {:request, "pane.close", %{"pane_id" => "w1:p9"}}
+    refute_receive {:request, "tab.close", _}, 50
+  end
+
+  test "subagent spawn is gated, scoped, bounded, and returns a durable report", ctx do
+    roles = Path.join(ctx.cwd, "roles")
+    File.mkdir_p!(roles)
+
+    File.write!(
+      Path.join(roles, "fix.md"),
+      "---\nname: fix\nsubagent: true\nmodel: vendor/review\neffort: medium\n---\nReview only."
+    )
+
+    config(:roles_dir, roles)
+    parent = working_run(ctx) |> Run.progress_changeset(%{tab_id: "w1:t2"}) |> Repo.update!()
+    parent = parent |> Run.changeset(%{worktree: "feature"}) |> Repo.update!()
+
+    Agent.update(
+      ctx.behavior,
+      &Map.put(
+        &1,
+        "worktree.list",
+        {:reply,
+         %{
+           type: "worktree_list",
+           worktrees: [
+             %{
+               path: Path.dirname(ctx.cwd),
+               branch: "main",
+               is_linked_worktree: false,
+               open_workspace_id: "w2"
+             },
+             %{
+               path: ctx.cwd,
+               branch: "feature",
+               is_linked_worktree: true,
+               open_workspace_id: "w1"
+             }
+           ]
+         }}
+      )
+    )
+
+    caller = %{run_id: parent.id, pane: parent.pane_id}
+
+    assert {:error, "subagents are disabled"} =
+             Jarvis2.Subagents.spawn(parent.id, "fix", "review")
+
+    config(:live_scenarios, [:subagents])
+    assert {:error, _} = Jarvis2.Subagents.spawn(parent.id, "planner", "review")
+    assert {:error, _} = Jarvis2.Subagents.spawn(parent.id, "fix", String.duplicate("x", 32_769))
+
+    assert {:ok, %{id: id, status: "starting"}} =
+             Jarvis2.MCP.Tools.call(
+               "spawn_subagent",
+               %{role: "fix", task: "private review task"},
+               caller
+             )
+
+    assert {:error, "a subagent is already running"} =
+             Jarvis2.Subagents.spawn(parent.id, "fix", "again")
+
+    assert_receive {:request, "pane.split",
+                    %{"target_pane_id" => "w1:p9", "focus" => false, "cwd" => checkout}},
+                   3_000
+
+    assert checkout == ctx.cwd
+    refute_receive {:request, "tab.create", _}, 50
+    refute_receive {:request, "worktree.list", _}, 50
+
+    assert_eventually(fn -> Runs.get_run(id).status == :working end)
+    child = Runs.get_run(id)
+    assert child.spawned_by_run_id == parent.id
+
+    assert {child.cwd, child.worktree, child.role, child.model, child.thinking} ==
+             {parent.cwd, parent.worktree, "fix", "vendor/review", "medium"}
+
+    assert {:error, _} = Jarvis2.Subagents.spawn(id, "fix", "nested")
+    assert {:error, "no such subagent"} = Jarvis2.Subagents.wait(id, Ecto.UUID.generate(), 1)
+    assert {:ok, %{status: "working"}} = Jarvis2.Subagents.wait(id, parent.id, 0)
+    assert {:error, _} = Jarvis2.MCP.Tools.call("ask_human", %{prompt: "private"}, %{run_id: id})
+
+    assert {:error, _} =
+             Jarvis2.MCP.Tools.call("request_approval", %{action: "private"}, %{run_id: id})
+
+    report = String.duplicate("review!", 500)
+    assert {:ok, _} = Jarvis2.MCP.Tools.call("submit_result", %{summary: report}, %{run_id: id})
+    assert {:ok, %{status: "working"}} = Jarvis2.Subagents.wait(id, parent.id, 0)
+    child_view = GenServer.call(ctx.mirror, :get)
+    Runs.apply_view(child_view, %{id => "working"})
+    assert_receive {:request, "pane.close", %{"pane_id" => "w1:p10"}}
+    refute_receive {:request, "tab.close", _}, 50
+    assert {:ok, %{status: "finished", result: result}} = Jarvis2.Subagents.wait(id, parent.id, 0)
+    assert result =~ "<subagent_result"
+    assert result =~ report
+    assert {:ok, %{result: ^result}} = Jarvis2.Subagents.wait(id, parent.id, 0)
+    refute inspect(Journal.recent()) =~ "private review task"
+    refute inspect(Journal.recent()) =~ report
+  end
+
+  test "concurrent spawns from one run create only one subagent", ctx do
+    roles = Path.join(ctx.cwd, "roles")
+    File.mkdir_p!(roles)
+    File.write!(Path.join(roles, "fix.md"), "---\nname: fix\nsubagent: true\n---\nReview only.")
+    config(:roles_dir, roles)
+    config(:live_scenarios, [:subagents])
+    parent = working_run(ctx) |> Run.progress_changeset(%{tab_id: "w1:t2"}) |> Repo.update!()
+
+    results =
+      1..2
+      |> Task.async_stream(fn _ -> Jarvis2.Subagents.spawn(parent.id, "fix", "review") end)
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert [{:ok, %{id: id}}] = Enum.filter(results, &match?({:ok, _}, &1))
+    assert {:error, "a subagent is already running"} in results
+    assert_eventually(fn -> Runs.get_run(id).status != :starting end)
+    assert Repo.aggregate(from(r in Run, where: r.spawned_by_run_id == ^parent.id), :count) == 1
+  end
+
+  test "subagent completion retries a rejected close and never loses its result", ctx do
+    parent = working_run(ctx)
+
+    {:ok, child} =
+      Runs.create_run(%{
+        name: "fix",
+        task: "review",
+        cwd: ctx.cwd,
+        role: "fix",
+        spawned_by_run_id: parent.id
+      })
+
+    child =
+      child
+      |> Run.progress_changeset(%{
+        status: :working,
+        pane_id: "w1:p9",
+        terminal_id: "term-run",
+        tab_id: "w1:t2",
+        started_at: DateTime.utc_now()
+      })
+      |> Repo.update!()
+
+    assert {:ok, _} = Runs.submit_result(child.id, "findings", [])
+    Agent.update(ctx.behavior, &Map.put(&1, "pane.close", {:error, "rejected"}))
+    Runs.apply_view(with_run_pane("idle"), %{child.id => "working"})
+    assert %{status: :done, result: %{"summary" => "findings"}} = Runs.get_run(child.id)
+    Agent.update(ctx.behavior, &Map.delete(&1, "pane.close"))
+    old = DateTime.add(DateTime.utc_now(), -30, :second)
+    Repo.update_all(from(r in Run, where: r.id == ^child.id), set: [finished_at: old])
+    Runs.apply_view(with_run_pane("working"), %{child.id => "working"})
+    assert %{status: :finished, result: %{"summary" => "findings"}} = Runs.get_run(child.id)
+  end
+
+  test "a waiting spawner wakes when its subagent finishes", ctx do
+    parent = working_run(ctx)
+
+    {:ok, child} =
+      Runs.create_run(%{
+        name: "fix",
+        role: "fix",
+        task: "review",
+        cwd: ctx.cwd,
+        spawned_by_run_id: parent.id
+      })
+
+    child = child |> Run.progress_changeset(%{status: :working}) |> Repo.update!()
+    waiter = Task.async(fn -> Jarvis2.Subagents.wait(child.id, parent.id, 5_000) end)
+    assert {:ok, child} = Runs.submit_result(child.id, "report", [])
+    Runs.transition_subagent(child, :finished, "test")
+    assert {:ok, %{status: "finished", result: result}} = Task.await(waiter, 1_000)
+    assert result =~ "report"
+  end
+
+  test "subagent disappearance distinguishes a reported result from a loss", ctx do
+    parent = working_run(ctx)
+
+    for {reported, expected} <- [{true, :finished}, {false, :lost}] do
+      {:ok, child} =
+        Runs.create_run(%{
+          name: "fix",
+          role: "fix",
+          task: "review",
+          cwd: ctx.cwd,
+          spawned_by_run_id: parent.id
+        })
+
+      child =
+        child
+        |> Run.progress_changeset(%{
+          status: :working,
+          pane_id: "missing",
+          terminal_id: "old",
+          started_at: DateTime.add(DateTime.utc_now(), -10, :second)
+        })
+        |> Repo.update!()
+
+      if reported, do: Runs.submit_result(child.id, "report", [])
+      Runs.apply_view(with_run_pane("working"), %{})
+      assert Runs.get_run(child.id).status == expected
+    end
+  end
+
+  test "a subagent that idles without a result fails with its pane open", ctx do
+    parent = working_run(ctx)
+
+    {:ok, child} =
+      Runs.create_run(%{
+        name: "fix",
+        role: "fix",
+        task: "review",
+        cwd: ctx.cwd,
+        spawned_by_run_id: parent.id
+      })
+
+    child
+    |> Run.progress_changeset(%{
+      status: :working,
+      pane_id: "w1:p10",
+      terminal_id: "other",
+      started_at: DateTime.utc_now()
+    })
+    |> Repo.update!()
+
+    agent = %{"pane_id" => "w1:p10", "agent" => "pi", "agent_status" => "idle"}
+    view = update_in(with_run_pane("idle"), [:snapshot, "agents"], &(&1 ++ [agent]))
+    :ok = GenServer.call(ctx.mirror, {:put, view})
+    Runs.apply_view(view, %{child.id => "working"})
+    assert Runs.get_run(child.id).status == :failed
+    assert {:ok, %{status: "failed"}} = Jarvis2.Subagents.wait(child.id, parent.id, 0)
+    refute_receive {:request, "pane.close", _}, 50
+  end
+
+  test "failed subagents keep their pane and the spawner cascade closes it", ctx do
+    parent = working_run(ctx)
+
+    {:ok, child} =
+      Runs.create_run(%{
+        name: "fix",
+        role: "fix",
+        task: "review",
+        cwd: ctx.cwd,
+        spawned_by_run_id: parent.id
+      })
+
+    child =
+      child
+      |> Run.progress_changeset(%{
+        status: :working,
+        pane_id: "w1:p9",
+        terminal_id: "term-run",
+        tab_id: "w1:t2",
+        started_at: DateTime.add(DateTime.utc_now(), -601, :second)
+      })
+      |> Repo.update!()
+
+    Runs.apply_view(with_run_pane("working"), %{child.id => "working"})
+    assert Runs.get_run(child.id).status == :failed
+    assert_receive {:request, "pane.send_keys", %{"pane_id" => "w1:p9", "keys" => ["esc"]}}
+    refute_receive {:request, "pane.close", _}, 50
+    assert {:ok, _} = Runs.submit_result(parent.id, "finished", [])
+    assert_receive {:request, "pane.close", %{"pane_id" => "w1:p9"}}
+    assert Runs.get_run(child.id).status == :stopped
+  end
+
+  test "the implementer is identifiable before its first prompt returns", ctx do
+    observer = self()
+    Agent.update(ctx.behavior, &Map.put(&1, "agent.prompt", {:hold, observer}))
+    {:ok, run} = Runs.create_run(%{name: "implementer", task: "work", cwd: ctx.cwd})
+    launcher = Task.async(fn -> Runs.launch(run) end)
+    assert_receive {:prompt_held, server}, 3_000
+    assert %{run_id: id} = Jarvis2.MCP.Caller.resolve(%{"x-herdr-pane" => "w1:p9"})
+    assert id == run.id
+    Runs.apply_view(view(), %{})
+    assert Runs.get_run(run.id).status == :starting
+    send(server, :release)
+    assert %{status: :working} = Task.await(launcher, 3_000)
+  end
+
+  test "a timed-out subagent must stop working before another can start", ctx do
+    roles = Path.join(ctx.cwd, "roles")
+    File.mkdir_p!(roles)
+    File.write!(Path.join(roles, "fix.md"), "---\nname: fix\nsubagent: true\n---\nReview only.")
+    config(:roles_dir, roles)
+    config(:live_scenarios, [:subagents])
+    parent = working_run(ctx) |> Run.progress_changeset(%{tab_id: "w1:t2"}) |> Repo.update!()
+
+    {:ok, child} =
+      Runs.create_run(%{
+        name: "fix",
+        role: "fix",
+        task: "review",
+        cwd: ctx.cwd,
+        spawned_by_run_id: parent.id
+      })
+
+    child
+    |> Run.progress_changeset(%{status: :failed, pane_id: "w1:p10", terminal_id: "other"})
+    |> Repo.update!()
+
+    agent = %{"pane_id" => "w1:p10", "agent" => "pi", "agent_status" => "working"}
+    busy = update_in(with_run_pane("idle"), [:snapshot, "agents"], &(&1 ++ [agent]))
+    :ok = GenServer.call(ctx.mirror, {:put, busy})
+
+    assert {:error, "a subagent is already running"} =
+             Jarvis2.Subagents.spawn(parent.id, "fix", "again")
+
+    idle = put_in(busy, [:snapshot, "agents", Access.at(1), "agent_status"], "idle")
+    :ok = GenServer.call(ctx.mirror, {:put, idle})
+    assert {:ok, %{id: id}} = Jarvis2.Subagents.spawn(parent.id, "fix", "again")
+    assert_eventually(fn -> Runs.get_run(id).status != :starting end)
+  end
+
+  test "stopping, losing or completing the spawner cleans up its child", ctx do
+    for ending <- [:stop, :lost, :card_done] do
+      parent = working_run(ctx) |> Run.progress_changeset(%{tab_id: "w1:t2"}) |> Repo.update!()
+
+      {:ok, child} =
+        Runs.create_run(%{
+          name: "fix",
+          role: "fix",
+          task: "review",
+          cwd: ctx.cwd,
+          spawned_by_run_id: parent.id
+        })
+
+      child
+      |> Run.progress_changeset(%{
+        status: :working,
+        pane_id: "w1:p10",
+        terminal_id: "other",
+        tab_id: "w1:t2",
+        started_at: DateTime.utc_now()
+      })
+      |> Repo.update!()
+
+      child_view = with_run_pane("idle")
+      :ok = GenServer.call(ctx.mirror, {:put, child_view})
+
+      case ending do
+        :stop ->
+          assert {:ok, _} = Runs.stop_run(parent)
+          assert_receive {:request, "tab.close", %{"tab_id" => "w1:t2"}}
+
+        :lost ->
+          missing_parent =
+            update_in(
+              child_view,
+              [:snapshot, "panes"],
+              &Enum.reject(&1, fn pane -> pane["pane_id"] == parent.pane_id end)
+            )
+
+          :ok = GenServer.call(ctx.mirror, {:put, missing_parent})
+          Runs.apply_view(missing_parent, %{})
+          assert Runs.get_run(parent.id).status == :lost
+          assert_receive {:request, "pane.close", %{"pane_id" => "w1:p10"}}
+
+        :card_done ->
+          {:ok, card} = Jarvis2.Kanban.create_card(%{title: "plan", cwd: ctx.cwd})
+
+          card
+          |> Ecto.Changeset.change(column: :agent, stage: :implementation, run_id: parent.id)
+          |> Repo.update!()
+
+          assert {:ok, _} = Jarvis2.Kanban.submit_deliverable(parent.id, "complete")
+          assert_receive {:request, "pane.close", %{"pane_id" => "w1:p10"}}
+      end
+
+      assert Runs.get_run(child.id).status == :stopped
+    end
+  end
+
+  test "a failed subagent launch retains its pane for the spawner cascade", ctx do
+    parent = working_run(ctx) |> Run.progress_changeset(%{tab_id: "w1:t2"}) |> Repo.update!()
+
+    {:ok, child} =
+      Runs.create_run(%{
+        name: "fix",
+        role: "fix",
+        task: "review",
+        cwd: ctx.cwd,
+        spawned_by_run_id: parent.id
+      })
+
+    Agent.update(ctx.behavior, &Map.put(&1, "agent.start", {:error, "agent_not_ready"}))
+
+    assert %{status: :failed, pane_id: "w1:p10", tab_id: "w1:t2"} =
+             Runs.launch(child, fn _ -> :ok end, "fix", {:split, parent.pane_id, parent.tab_id})
+
+    :ok =
+      GenServer.call(
+        ctx.mirror,
+        {:put,
+         with_run_pane("idle")
+         |> put_in([:snapshot, "panes", Access.at(2), "terminal_id"], "term-impl")}
+      )
+
+    assert {:ok, _} = Runs.submit_result(parent.id, "finished", [])
+    assert_receive {:request, "pane.close", %{"pane_id" => "w1:p10"}}
+  end
+
+  test "subagent spawn lifetime is limited and reports reject oversized results", ctx do
+    roles = Path.join(ctx.cwd, "roles")
+    File.mkdir_p!(roles)
+    File.write!(Path.join(roles, "fix.md"), "---\nname: fix\nsubagent: true\n---\nReview only.")
+    config(:roles_dir, roles)
+    config(:live_scenarios, [:subagents])
+    parent = working_run(ctx) |> Run.progress_changeset(%{tab_id: "w1:t2"}) |> Repo.update!()
+
+    for _ <- 1..3 do
+      {:ok, child} =
+        Runs.create_run(%{
+          name: "fix",
+          role: "fix",
+          task: "review",
+          cwd: ctx.cwd,
+          spawned_by_run_id: parent.id
+        })
+
+      assert {:error, "summary exceeds 32768 bytes; shorten it"} =
+               Runs.submit_result(child.id, String.duplicate("x", 32_769), [])
+
+      child |> Run.progress_changeset(%{status: :failed}) |> Repo.update!()
+    end
+
+    assert {:error, "subagent limit reached"} = Jarvis2.Subagents.spawn(parent.id, "fix", "again")
+  end
+
+  test "subagent guard caller is isolated per spawner", %{cwd: cwd} do
+    {:ok, parent} = Runs.create_run(%{name: "parent", task: "work", cwd: cwd})
+
+    {:ok, child} =
+      Runs.create_run(%{name: "fix", task: "review", cwd: cwd, spawned_by_run_id: parent.id})
+
+    assert Launcher.caller(parent).pane == "system:ui"
+
+    assert Launcher.caller(child) == %{
+             system: "subagent",
+             pane: "system:subagent:" <> parent.id,
+             run_id: child.id
+           }
+
+    guard = Application.fetch_env!(:jarvis2, :execution_guard)
+    assert {:ok, _, lease} = ExecutionGuard.reserve(Launcher.caller(child), guard)
+    :ok = ExecutionGuard.finish(lease, :uncertain, guard)
+
+    assert {:error, "caller execution is busy or cooling down"} =
+             ExecutionGuard.reserve(Launcher.caller(child), guard)
+
+    assert {:ok, _, lease} = ExecutionGuard.reserve(Launcher.caller(parent), guard)
+    :ok = ExecutionGuard.finish(lease, :ok, guard)
   end
 
   test "a tab reply without a tab id still launches with legacy pane cleanup", ctx do
@@ -1265,8 +1751,20 @@ defmodule Jarvis2.RunsTest do
 
   defp respond(%{"method" => method}, _mirror, behavior) when is_map_key(behavior, method) do
     case behavior[method] do
-      {:error, code} -> {:reply, %{error: %{code: code, message: "simulated"}}}
-      {:reply, result} -> {:reply, %{result: result}}
+      {:error, code} ->
+        {:reply, %{error: %{code: code, message: "simulated"}}}
+
+      {:reply, result} ->
+        {:reply, %{result: result}}
+
+      {:hold, observer} ->
+        send(observer, {:prompt_held, self()})
+
+        receive do
+          :release -> {:reply, %{result: %{type: "agent_prompt", submitted: true}}}
+        after
+          3_000 -> {:reply, %{error: %{code: "timeout", message: "test timeout"}}}
+        end
     end
   end
 
@@ -1373,6 +1871,9 @@ defmodule Jarvis2.RunsTest do
     do: {:reply, %{result: %{type: "ok"}}}
 
   defp respond(%{"method" => "pane.close"}, _mirror, _), do: {:reply, %{result: %{type: "ok"}}}
+
+  defp respond(%{"method" => "pane.send_keys"}, _mirror, _),
+    do: {:reply, %{result: %{type: "ok"}}}
 
   defp view do
     %{

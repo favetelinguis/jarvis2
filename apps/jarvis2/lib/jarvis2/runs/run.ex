@@ -3,7 +3,7 @@ defmodule Jarvis2.Runs.Run do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @statuses [:starting, :working, :blocked, :done, :failed, :lost, :stopped]
+  @statuses [:starting, :working, :blocked, :done, :finished, :failed, :lost, :stopped]
   @active [:starting, :working, :blocked, :done]
   @thinking ~w(off minimal low medium high xhigh max)
 
@@ -25,6 +25,7 @@ defmodule Jarvis2.Runs.Run do
     field(:terminal_id, :string)
     field(:agent_name, :string)
     field(:parent_run_id, :binary_id)
+    field(:spawned_by_run_id, :binary_id)
     field(:result, :map)
     field(:started_at, :utc_datetime_usec)
     field(:finished_at, :utc_datetime_usec)
@@ -50,6 +51,7 @@ defmodule Jarvis2.Runs.Run do
       :worktree,
       :task,
       :parent_run_id,
+      :spawned_by_run_id,
       :session_id
     ])
     |> validate_required([:name, :kind, :model, :thinking, :cwd, :worktree, :task])

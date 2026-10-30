@@ -32,9 +32,16 @@ defmodule Jarvis2.SettingsTest do
   end
 
   test "updating publishes the enabled scenarios to the guarded actions" do
-    assert {:ok, _} = Settings.update(%{scenarios: ["agent_spawn", "attention", "attention"]})
-    assert Settings.get().scenarios == ["agent_spawn", "attention"]
-    assert Enum.sort(Application.get_env(:jarvis2, :live_scenarios)) == [:agent_spawn, :attention]
+    assert {:ok, _} =
+             Settings.update(%{scenarios: ["agent_spawn", "attention", "attention", "subagents"]})
+
+    assert Settings.get().scenarios == ["agent_spawn", "attention", "subagents"]
+
+    assert Enum.sort(Application.get_env(:jarvis2, :live_scenarios)) == [
+             :agent_spawn,
+             :attention,
+             :subagents
+           ]
 
     assert {:ok, _} = Settings.update(%{scenarios: []})
     assert Application.get_env(:jarvis2, :live_scenarios) == []
@@ -48,6 +55,26 @@ defmodule Jarvis2.SettingsTest do
     assert Application.get_env(:jarvis2, :live_scenarios) == [:attention]
     assert Settings.allowed?(:attention)
     refute Settings.allowed?(:agent_spawn)
+  end
+
+  test "subagents are accepted by the environment ceiling" do
+    dir = Path.join(System.tmp_dir!(), "jarvis2-runtime-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(dir) end)
+    runtime = Path.expand("../../../config/runtime.exs", __DIR__)
+
+    script =
+      "config = Config.Reader.read!(#{inspect(runtime)}, env: :prod); IO.inspect(config[:jarvis2][:allowed_scenarios])"
+
+    {output, 0} =
+      System.cmd("elixir", ["-e", script],
+        env: [
+          {"JARVIS2_STATE_DIR", dir},
+          {"JARVIS2_SCENARIOS", "subagents"},
+          {"ERL_FLAGS", "+S 2"}
+        ]
+      )
+
+    assert output =~ "[:subagents]"
   end
 
   test "rejects unknown scenarios and unsafe or unknown defaults" do

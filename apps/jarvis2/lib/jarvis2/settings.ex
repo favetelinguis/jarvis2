@@ -12,6 +12,7 @@ defmodule Jarvis2.Settings do
     "attention" => "Notify when an agent is blocked or done",
     "agent_prompt" => "Send agent-to-agent prompts",
     "agent_spawn" => "Start sibling agents (MCP)",
+    "subagents" => "Let runs start subagents (MCP)",
     "run_command" => "Run shell commands in a new sibling pane (MCP)",
     "test_loop" => "Run mix test after an agent's turn and prompt it about failures",
     "sidebar_tokens" => "Show agent status in Herdr's sidebar",

@@ -14,6 +14,8 @@ export default function (pi) {
       request_approval: "direct",
       wait_for_answer: "direct",
       submit_result: "direct",
+      spawn_subagent: "direct",
+      wait_for_subagent: "direct",
       ask_questions: "direct",
       submit_deliverable: "direct",
     },

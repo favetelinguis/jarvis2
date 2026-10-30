@@ -68,19 +68,24 @@ defmodule Jarvis2.Runs do
   def launch(run, on_prompt \\ fn _ -> :ok end, label \\ nil, placement \\ :tab)
 
   def launch(%Run{status: :starting} = run, on_prompt, label, placement) do
-    case Launcher.start(run, label, placement) do
+    on_started = fn {stage, info} -> record_launch_pane(run, stage, info) end
+
+    case Launcher.start(run, label, placement, on_started) do
       {:ok, info} ->
+        current = get_run(run.id)
+        status = if current.result, do: current.status, else: :working
+
         launched =
-          run
+          current
           |> progress(%{
-            status: :working,
+            status: status,
             workspace_id: info.workspace_id,
             cwd: info.cwd,
             tab_id: info.tab_id,
             pane_id: info.pane_id,
             terminal_id: info.terminal_id,
             agent_name: info.agent_name,
-            started_at: now()
+            started_at: current.started_at || now()
           })
           |> record(
             "run.start",
@@ -92,13 +97,28 @@ defmodule Jarvis2.Runs do
         launched
 
       {:error, message} ->
-        run
+        get_run(run.id)
         |> progress(%{status: :failed, finished_at: now(), result: %{error: message}})
         |> record("run.start", %{error: message}, :error)
     end
   end
 
   def launch(run, _on_prompt, _label, _placement), do: run
+
+  # The first prompt can reach MCP before agent.prompt returns. Publish the parent's
+  # identity first, while keeping it in :starting until launch completes.
+  defp record_launch_pane(%Run{spawned_by_run_id: nil}, :pane, _info), do: :ok
+
+  defp record_launch_pane(%Run{spawned_by_run_id: nil} = run, :agent, info) do
+    progress(get_run(run.id), info)
+    :ok
+  end
+
+  defp record_launch_pane(run, stage, info) do
+    attrs = if stage == :agent, do: %{status: :working, started_at: now()}, else: %{}
+    progress(get_run(run.id), Map.merge(info, attrs))
+    :ok
+  end
 
   @doc """
   Runs an allow-listed Mix task as a run of kind `mix` and returns the runner's own result. The
@@ -164,9 +184,30 @@ defmodule Jarvis2.Runs do
     {:error, message}
   end
 
+  @doc false
+  def fail_subagent(%Run{spawned_by_run_id: id} = run, reason) when is_binary(id) do
+    run
+    |> progress(%{status: :failed, finished_at: now(), result: %{error: reason}})
+    |> record("run.status", %{to: "failed", reason: reason}, :error)
+  end
+
   @doc "An agent's final result (via MCP): finishes the run and cancels open questions."
   def submit_result(run_id, summary, artifacts) do
-    with %Run{} = run <- get_run(run_id), true <- Run.active?(run) do
+    case get_run(run_id) do
+      %Run{spawned_by_run_id: id} when is_binary(id) ->
+        Jarvis2.Subagents.synchronize(id, fn ->
+          submit_result_locked(run_id, summary, artifacts)
+        end)
+
+      _ ->
+        submit_result_locked(run_id, summary, artifacts)
+    end
+  end
+
+  defp submit_result_locked(run_id, summary, artifacts) do
+    with %Run{} = run <- get_run(run_id),
+         true <- Run.active?(run),
+         :ok <- valid_result(run, summary, artifacts) do
       updated =
         progress(run, %{
           status: :done,
@@ -175,12 +216,38 @@ defmodule Jarvis2.Runs do
         })
 
       Questions.cancel_for_run(run.id)
+      if is_nil(run.spawned_by_run_id), do: Jarvis2.Subagents.stop_all(run.id)
       record(updated, "run.result", %{artifacts: length(artifacts)})
       {:ok, updated}
     else
+      {:error, _} = error -> error
       _ -> {:error, "The run is not active."}
     end
   end
+
+  defp valid_result(run, summary, artifacts) do
+    max = if run.spawned_by_run_id, do: 32_768, else: 2_000
+
+    cond do
+      not is_binary(summary) or byte_size(summary) == 0 ->
+        {:error, "summary or artifacts are invalid or too long"}
+
+      byte_size(summary) > max ->
+        {:error, "summary exceeds #{max} bytes; shorten it"}
+
+      not String.valid?(summary) or not valid_artifacts?(artifacts) ->
+        {:error, "summary or artifacts are invalid or too long"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_artifacts?(artifacts) when is_list(artifacts),
+    do:
+      length(artifacts) <= 20 and Enum.all?(artifacts, &(is_binary(&1) and byte_size(&1) <= 500))
+
+  defp valid_artifacts?(_), do: false
 
   def prompt_run(%Run{} = run, text, opts \\ []) when is_binary(text) do
     cond do
@@ -206,12 +273,17 @@ defmodule Jarvis2.Runs do
   observed agent statuses. A run is `done` when its agent goes from working or blocked to idle.
   """
   def apply_view(%{stale: false, snapshot: snapshot} = view, seen) when is_map(snapshot) do
-    Enum.reduce(active_runs(), seen, fn run, seen -> reconcile(run, view, seen) end)
+    seen =
+      Enum.reduce(active_runs(), seen, fn run, seen ->
+        if run.spawned_by_run_id, do: seen, else: reconcile(run, view, seen)
+      end)
+
+    Jarvis2.Subagents.tick(view, seen)
   end
 
   def apply_view(_view, seen), do: seen
 
-  defp reconcile(%Run{pane_id: nil, status: :starting} = run, _view, seen) do
+  defp reconcile(%Run{status: :starting} = run, _view, seen) do
     if DateTime.diff(now(), run.inserted_at, :millisecond) > @stale_start_ms do
       run
       |> progress(%{status: :failed, finished_at: now(), result: %{error: "launch interrupted"}})
@@ -268,6 +340,19 @@ defmodule Jarvis2.Runs do
 
   defp next_status(status, _prev, _current), do: status
 
+  @doc false
+  def transition_subagent(%Run{spawned_by_run_id: id} = run, status, reason \\ nil)
+      when is_binary(id) do
+    attrs = %{status: status}
+
+    attrs =
+      if status in [:failed, :lost, :stopped],
+        do: Map.put(attrs, :finished_at, now()),
+        else: attrs
+
+    run |> progress(attrs) |> record("run.status", %{to: status, reason: reason})
+  end
+
   defp progress(run, attrs) do
     # Round-trip the result so the returned run matches what a reload would give.
     attrs = Map.update(attrs, :result, nil, &(&1 && &1 |> Jason.encode!() |> Jason.decode!()))
@@ -275,7 +360,10 @@ defmodule Jarvis2.Runs do
 
     {:ok, run} = run |> Run.progress_changeset(attrs) |> Repo.update()
 
-    if run.status in [:failed, :lost, :stopped], do: Questions.cancel_for_run(run.id)
+    if run.status in [:failed, :lost, :stopped] do
+      Questions.cancel_for_run(run.id)
+      if is_nil(run.spawned_by_run_id), do: Jarvis2.Subagents.stop_all(run.id)
+    end
 
     broadcast(run)
     run

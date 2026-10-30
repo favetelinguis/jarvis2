@@ -13,6 +13,7 @@ defmodule Jarvis2.Runs.Monitor do
   @impl true
   def init(_opts) do
     Phoenix.PubSub.subscribe(Jarvis2.PubSub, "mirror:updated")
+    Process.send_after(self(), :tick, 1_000)
     {:ok, %{seen: %{}}}
   end
 
@@ -23,6 +24,19 @@ defmodule Jarvis2.Runs.Monitor do
     else
       {:noreply, state}
     end
+  end
+
+  def handle_info(:tick, state) do
+    Process.send_after(self(), :tick, 1_000)
+
+    view =
+      try do
+        Mirror.get(Application.get_env(:jarvis2, :mirror, Mirror))
+      catch
+        :exit, _ -> nil
+      end
+
+    {:noreply, %{state | seen: apply_view(view, state.seen)}}
   end
 
   def handle_info(_message, state), do: {:noreply, state}

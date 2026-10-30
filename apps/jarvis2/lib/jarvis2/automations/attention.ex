@@ -24,7 +24,8 @@ defmodule Jarvis2.Automations.Attention do
         state
       )
       when is_binary(pane) and is_binary(status) do
-    if byte_size(pane) in 1..128 and status in ~w(idle working blocked done unknown) do
+    if byte_size(pane) in 1..128 and status in ~w(idle working blocked done unknown) and
+         not Jarvis2.Subagents.pane?(pane) do
       now = System.monotonic_time(:millisecond)
 
       case state.timeline[pane] do

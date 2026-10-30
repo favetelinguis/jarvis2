@@ -98,6 +98,47 @@ defmodule Jarvis2.AutomationsTest do
              Jarvis2.Journal.recent(source: :automation)
   end
 
+  test "attention and test loop ignore subagent panes" do
+    {:ok, parent} = Jarvis2.Runs.create_run(%{name: "parent", task: "work", cwd: File.cwd!()})
+
+    {:ok, child} =
+      Jarvis2.Runs.create_run(%{
+        name: "fix",
+        task: "review",
+        cwd: File.cwd!(),
+        spawned_by_run_id: parent.id
+      })
+
+    child
+    |> Jarvis2.Runs.Run.progress_changeset(%{
+      pane_id: "w1:p99",
+      terminal_id: "t",
+      status: :working
+    })
+    |> Repo.update!()
+
+    start_supervised!({Attention, [name: nil]})
+    loop = start_supervised!({Jarvis2.Automations.TestLoop, [name: nil]})
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, "scenario:attention")
+
+    for status <- ["working", "blocked", "working", "done"] do
+      Phoenix.PubSub.local_broadcast(
+        Jarvis2.PubSub,
+        "herdr:pane.agent_status_changed",
+        {:jarvis2, "herdr:pane.agent_status_changed",
+         %{data: %{"pane_id" => "w1:p99", "agent_status" => status}}}
+      )
+    end
+
+    refute_receive {:jarvis2, "scenario:attention", %{pane: "w1:p99"}}, 200
+    assert :sys.get_state(loop).active == %{}
+
+    refute Enum.any?(
+             Jarvis2.Journal.recent(source: :automation),
+             &(&1.type == "automation.attention")
+           )
+  end
+
   test "explicitly enabled scenarios send only expected live requests" do
     path =
       Path.join(

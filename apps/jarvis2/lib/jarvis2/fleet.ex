@@ -19,6 +19,18 @@ defmodule Jarvis2.Fleet do
     |> audit("fleet.spawn_agent", caller, args, opts)
   end
 
+  def spawn_subagent(caller, role, task) do
+    result = Jarvis2.Subagents.spawn(caller[:run_id], role, task)
+
+    audit(
+      result,
+      "fleet.spawn_subagent",
+      caller,
+      %{role_bytes: bytes(role), task_bytes: bytes(task)},
+      []
+    )
+  end
+
   def run_command(caller, args, opts \\ []) do
     caller
     |> Actions.run_command(args, opts)
@@ -37,6 +49,9 @@ defmodule Jarvis2.Fleet do
 
     result
   end
+
+  defp bytes(value) when is_binary(value), do: byte_size(value)
+  defp bytes(_), do: 0
 
   defp outcome({:ok, _}), do: :ok
 

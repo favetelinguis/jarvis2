@@ -14,6 +14,9 @@ defmodule Jarvis2.Runs.Launcher do
   @prompt_wait_ms 15_000
   @retryable ~w(target_unavailable target_not_ready caller_or_mirror_unavailable target_busy rate_limited)
 
+  def caller(%Run{id: id, spawned_by_run_id: spawner}) when is_binary(spawner),
+    do: %{system: "subagent", pane: "system:subagent:" <> spawner, run_id: id}
+
   def caller(%Run{id: id}), do: Map.put(@ui, :run_id, id)
 
   @doc "Whether a run could be started now; the error is shown to the user."
@@ -43,20 +46,20 @@ defmodule Jarvis2.Runs.Launcher do
   def agent_args(_run), do: []
 
   @doc "Starts the run's agent. Returns the details to store on the run."
-  def start(%Run{} = run, label \\ nil, placement \\ :tab) do
+  def start(%Run{} = run, label \\ nil, placement \\ :tab, on_started \\ fn _ -> :ok end) do
     guard = Application.get_env(:jarvis2, :execution_guard, ExecutionGuard)
 
     if Actions.valid_prompt_text?(Jarvis2.Runs.Prompt.build(run)) do
-      reserve_and_start(run, label, placement, guard)
+      reserve_and_start(run, label, placement, guard, on_started)
     else
       {:error, "The complete run prompt is invalid or exceeds 65536 bytes."}
     end
   end
 
-  defp reserve_and_start(run, label, placement, guard) do
+  defp reserve_and_start(run, label, placement, guard, on_started) do
     case ExecutionGuard.reserve(caller(run), guard) do
       {:ok, _verified, lease} ->
-        result = guarded(fn -> execute(run, label, placement) end)
+        result = guarded(fn -> execute(run, label, placement, on_started) end)
 
         ExecutionGuard.finish(
           lease,
@@ -71,7 +74,9 @@ defmodule Jarvis2.Runs.Launcher do
     end
   end
 
-  @doc "Closes the owned tab, or the original pane for legacy runs."
+  @doc "Closes the owned tab, or only the pane for subagents and legacy runs."
+  def close(%Run{spawned_by_run_id: id} = run) when is_binary(id), do: close_pane(run)
+
   def close(%Run{tab_id: tab_id}) when is_binary(tab_id) and tab_id != "" do
     case fresh(current_view()) do
       {:ok, %{snapshot: %{"tabs" => tabs}}} when is_list(tabs) ->
@@ -85,14 +90,33 @@ defmodule Jarvis2.Runs.Launcher do
     end
   end
 
-  def close(%Run{pane_id: nil}), do: {:ok, :gone}
+  def close(%Run{} = run), do: close_pane(run)
 
-  def close(%Run{} = run) do
+  @doc "Closes only the run's pane after verifying its terminal."
+  def close_pane(%Run{pane_id: nil}), do: {:ok, :gone}
+
+  def close_pane(%Run{} = run) do
     with {:ok, view} <- fresh(current_view()) do
       case find(run, view) do
         nil -> {:ok, :gone}
-        {pane, _agent} -> close_pane(pane["pane_id"])
+        {pane, _agent} -> request_close_pane(pane["pane_id"])
       end
+    end
+  end
+
+  @doc "Interrupts a subagent turn without closing its pane."
+  def interrupt_pane(%Run{} = run) do
+    with {:ok, view} <- fresh(current_view()),
+         {pane, _} <- find(run, view) do
+      case Socket.request("pane.send_keys", %{pane_id: pane["pane_id"], keys: ["esc"]},
+             server: socket()
+           ) do
+        {:ok, _} -> {:ok, :interrupted}
+        {:error, _} -> {:error, "Herdr could not interrupt the subagent"}
+      end
+    else
+      nil -> {:error, "The subagent pane is unavailable"}
+      error -> error
     end
   end
 
@@ -103,7 +127,7 @@ defmodule Jarvis2.Runs.Launcher do
     end
   end
 
-  defp close_pane(pane_id) do
+  defp request_close_pane(pane_id) do
     case Socket.request("pane.close", %{pane_id: pane_id}, server: socket()) do
       {:ok, _} -> {:ok, :closed}
       {:error, _} -> {:error, "Herdr could not close the pane"}
@@ -147,29 +171,45 @@ defmodule Jarvis2.Runs.Launcher do
 
   def find(_run, _view), do: nil
 
-  defp execute(run, label, placement) do
+  defp execute(run, label, placement, on_started) do
     with {:ok, view} <- fresh(current_view()),
-         {:ok, workspace} <- Workspaces.resolve(run.cwd, run.worktree),
+         {:ok, workspace} <- resolve_workspace(run, view),
          run = %{run | cwd: workspace.checkout_path},
          {:ok, pane, tab_id} <- create_pane(run, view, workspace.workspace_id, label, placement),
+         info = %{
+           tab_id: tab_id,
+           workspace_id: workspace.workspace_id,
+           cwd: workspace.checkout_path,
+           pane_id: pane["pane_id"],
+           terminal_id: pane["terminal_id"],
+           agent_name: agent_name(run)
+         },
+         :ok <- on_started.({:pane, info}),
          :ok <- rename_role(pane, run.role),
          :ok <- close_fresh_tabs(workspace.fresh_tab_ids),
          :ok <- shell_ready(pane),
          {:ok, _agent} <- start_agent(run, pane) do
       display_role(pane, run)
 
-      {:ok,
-       %{
-         tab_id: tab_id,
-         workspace_id: workspace.workspace_id,
-         cwd: workspace.checkout_path,
-         pane_id: pane["pane_id"],
-         terminal_id: pane["terminal_id"],
-         agent_name: agent_name(run),
-         prompt: send_task(run, pane)
-       }}
+      on_started.({:agent, info})
+      {:ok, Map.put(info, :prompt, send_task(run, pane))}
     end
   end
+
+  defp resolve_workspace(%Run{spawned_by_run_id: id} = run, view) when is_binary(id) do
+    parent = Jarvis2.Runs.get_run(id)
+
+    case parent && find(parent, view) do
+      {%{"workspace_id" => workspace}, _}
+      when is_binary(workspace) and parent.cwd == run.cwd and parent.worktree == run.worktree ->
+        {:ok, %{workspace_id: workspace, checkout_path: run.cwd, fresh_tab_ids: []}}
+
+      _ ->
+        {:error, "The spawner's checkout or workspace is unavailable."}
+    end
+  end
+
+  defp resolve_workspace(run, _view), do: Workspaces.resolve(run.cwd, run.worktree)
 
   defp rename_role(_pane, nil), do: :ok
 
@@ -216,6 +256,25 @@ defmodule Jarvis2.Runs.Launcher do
   defp create_pane(run, _view, workspace_id, label, :tab),
     do: create_tab(run, workspace_id, label)
 
+  defp create_pane(
+         %Run{spawned_by_run_id: parent_id} = run,
+         view,
+         workspace_id,
+         _label,
+         {:split, pane_id, tab_id}
+       )
+       when is_binary(parent_id) do
+    parent = Jarvis2.Runs.get_run(parent_id)
+
+    case parent && find(parent, view) do
+      {%{"pane_id" => ^pane_id, "tab_id" => ^tab_id, "workspace_id" => ^workspace_id}, _} ->
+        split_pane(run, pane_id, tab_id, workspace_id)
+
+      _ ->
+        {:error, "The spawner's pane or workspace is unavailable."}
+    end
+  end
+
   defp create_pane(run, view, workspace_id, label, {:split, pane_id, tab_id}) do
     panes = view.snapshot["panes"] || []
 
@@ -224,13 +283,13 @@ defmodule Jarvis2.Runs.Launcher do
          &(&1["pane_id"] == pane_id and &1["tab_id"] == tab_id and
              &1["workspace_id"] == workspace_id)
        ) do
-      split_pane(run, pane_id, tab_id)
+      split_pane(run, pane_id, tab_id, workspace_id)
     else
       create_pane(run, view, workspace_id, label, :tab)
     end
   end
 
-  defp split_pane(run, pane_id, tab_id) do
+  defp split_pane(run, pane_id, tab_id, workspace_id) do
     params = %{
       target_pane_id: pane_id,
       direction: "right",
@@ -246,9 +305,15 @@ defmodule Jarvis2.Runs.Launcher do
       {:ok,
        %{
          "type" => "pane_info",
-         "pane" => %{"pane_id" => id, "terminal_id" => terminal, "tab_id" => ^tab_id} = pane
+         "pane" =>
+           %{
+             "pane_id" => id,
+             "terminal_id" => terminal,
+             "tab_id" => ^tab_id,
+             "workspace_id" => ^workspace_id
+           } = pane
        }}
-      when is_binary(id) and id != "" and is_binary(terminal) and terminal != "" ->
+      when is_binary(id) and id != "" and id != pane_id and is_binary(terminal) and terminal != "" ->
         {:ok, pane, tab_id}
 
       {:error, %{code: code}} when code not in ["timeout", "disconnected"] ->

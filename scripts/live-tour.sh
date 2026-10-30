@@ -2,6 +2,7 @@
 # Scripted tour of the live workflows against an isolated Herdr session.
 #
 #   scripts/live-tour.sh              mock model: automated PASS/FAIL checks, safe for CI-style use.
+#   TOUR=review scripts/live-tour.sh  mock implementer/fix review, including a human blocker.
 #   MODEL=luna scripts/live-tour.sh   showcase: starts Jarvis2 against an isolated Herdr session and
 #                                     leaves it running so you can start a real openrouter/openai/gpt-6-luna
 #                                     run from the browser. Uses your real Pi configuration and credits.
@@ -16,6 +17,8 @@ d=$(mktemp -d /tmp/jarvis2-tour.XXXXXX)
 n=jarvis2
 free_port(){ python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
 luna=0; [ "${MODEL:-mock}" = luna ] && luna=1
+review=0; [ "${TOUR:-}" = review ] && review=1
+[ "$luna" = 1 ] && [ "$review" = 1 ] && { echo "TOUR=review requires the mock model" >&2; exit 2; }
 mp=$(free_port); jp=$(free_port)
 [ "$luna" = 1 ] && jp=${JARVIS2_PORT:-4747}   # your Pi MCP config points at this port
 fail=0; mock=; app=
@@ -33,6 +36,7 @@ if [ "$luna" = 1 ]; then
     || echo "note: add the jarvis2 server from .pi/mcp.json to ${PI_CODING_AGENT_DIR:-~/.pi/agent}/mcp.json so agents can call its tools" >&2
 else
   export PI_CODING_AGENT_DIR="$d/pi" PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1
+  [ "$review" = 1 ] && export MOCK_REVIEW_FLOW=1
   printf '{"providers":{"mock":{"baseUrl":"http://127.0.0.1:%s/v1","api":"openai-completions","apiKey":"x","models":[{"id":"mock"}]}}}\n' "$mp" > "$d/pi/models.json"
   printf '{"defaultProvider":"mock","defaultModel":"mock","quietStartup":true}\n' > "$d/pi/settings.json"
   python3 "$root/scripts/mock_model.py" "$mp" "$d/requests.log" & mock=$!
@@ -45,6 +49,27 @@ cleanup(){ herdr session stop "$n" >/dev/null 2>&1; herdr session delete "$n" >/
   if [ "$fail" = 0 ]; then rm -rf "$d"; else echo "kept $d"; fi; }
 trap cleanup EXIT
 cd "$root"
+if [ "$review" = 1 ]; then
+  mkdir -p "$d/roles" "$d/tmp"
+  git -C "$d/repo" worktree add -q -b tour-linked "$d/linked" || { fail=1; exit 1; }
+  cp "$root/roles/fix.md" "$d/roles/fix.md"
+  python3 - "$d/roles/fix.md" <<'PY'
+import pathlib, re, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = re.sub(r'^model: .*$', 'model: mock/mock', text, flags=re.MULTILINE)
+text = re.sub(r'^effort: .*$', 'effort: off', text, flags=re.MULTILINE)
+path.write_text(text)
+PY
+  export JARVIS2_ROLES_DIR="$d/roles" TMPDIR="$d/tmp" TOUR_REPO="$d/repo" TOUR_PORT="$jp" TOUR_REQUEST_LOG="$d/requests.log"
+  if MIX_ENV=test timeout 180 mix run scripts/live-review.exs >"$d/app.log" 2>&1; then
+    grep '^PASS ' "$d/app.log"
+  else
+    echo "FAIL review tour; see $d/app.log and $d/requests.log" >&2
+    fail=1
+  fi
+  exit "$fail"
+fi
 if [ "$luna" = 1 ]; then
   JARVIS2_PORT=$jp JARVIS2_STATE_DIR="$d/state" \
     mix run --no-halt >"$d/app.log" 2>&1 & app=$!

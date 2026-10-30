@@ -29,7 +29,16 @@ Instructions in `skills/<name>/SKILL.md` that an agent loads on demand when its 
 An agent environment, such as Pi, that can connect to Jarvis2 to create cards.
 
 **Run**:
-One Pi agent session started for a card's stage, in its own Herdr tab.
+One Pi agent session started for a card's stage or as a subagent, with its own Herdr pane.
+
+**Subagent**:
+A run spawned by another run to review its work and return a report.
+
+**Spawner**:
+The run that starts a subagent and receives its report.
+
+**Fix review**:
+A read-only review of an implementer's working-tree changes by a fix subagent.
 
 **Round**:
 One batch of questions an agent asks the human with `ask_questions`; rounds are numbered across the card.

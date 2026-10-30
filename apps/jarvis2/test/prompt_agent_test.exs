@@ -74,7 +74,7 @@ defmodule Jarvis2.PromptAgentTest do
       start_supervised({Bandit, plug: Jarvis2Web.Endpoint, ip: {127, 0, 0, 1}, port: 0})
 
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(server)
-    %{port: port, mirror: mirror, view: view, behavior: behavior}
+    %{port: port, mirror: mirror, view: view, behavior: behavior, socket: socket}
   end
 
   test "prompts are scoped and refuse self and unsafe targets", ctx do
@@ -131,6 +131,15 @@ defmodule Jarvis2.PromptAgentTest do
     config(:live_scenarios, [:agent_prompt])
     assert {:ok, %{"type" => "agent_prompt"}} = prompt(ctx, h, "beta", "live", false)
     assert_receive {:prompt_request, %{"method" => "agent.prompt"}}, 1_000
+  end
+
+  test "a subagent launch uses its own system caller without requiring agent_prompt", ctx do
+    caller = %{system: "subagent", pane: "system:subagent:parent", run_id: "child"}
+
+    assert {:ok, _} =
+             Jarvis2.Herdr.Actions.prompt(caller, "w1:p2", "review", false, server: ctx.socket)
+
+    assert_receive {:prompt_request, %{"method" => "agent.prompt"}}
   end
 
   test "explicit live gate resolves a pane target and bounds wait without logging text",
