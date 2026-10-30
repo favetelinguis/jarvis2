@@ -1,8 +1,8 @@
 ---
 name: fix
 description: Reviews an implementer's working-tree changes and reports actionable findings.
-model: openrouter/openai/gpt-6-luna
-effort: medium
+model: openrouter/anthropic/claude-sonnet-5.5
+effort: high
 subagent: true
 ---
 
