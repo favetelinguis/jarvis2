@@ -41,8 +41,8 @@ still be installed separately and available on PATH. `run_mix` additionally requ
 
 To build locally: `MIX_ENV=prod mix release`, then `_build/prod/rel/jarvis2/bin/jarvis2 start`.
 Pushing a `v`-prefixed version tag builds native x86-64 and ARM64 archives for Linux and macOS; GitHub
-publishes the release only after all four builds and smoke checks succeed. Linux archives require a compatible
-glibc-based distribution (built on Ubuntu 24.04).
+publishes the release only after all four builds and smoke checks succeed. The workflow can also be run
+manually against a version tag. Linux archives require a compatible glibc-based distribution (built on Ubuntu 24.04).
 
 ## The showcase: a Pi agent on `openrouter/openai/gpt-6-luna`
 
