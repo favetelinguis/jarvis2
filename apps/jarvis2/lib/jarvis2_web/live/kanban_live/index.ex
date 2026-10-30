@@ -4,8 +4,8 @@ defmodule Jarvis2Web.KanbanLive.Index do
   import Jarvis2Web.Components
   import Jarvis2Web.KanbanLive.SkillUses, only: [skill_uses: 1]
   alias Phoenix.LiveView.JS
-  alias Jarvis2.{Kanban, Runs}
-  alias Jarvis2.Kanban.{Card, Kind}
+  alias Jarvis2.{Kanban, Runs, Settings}
+  alias Jarvis2.Kanban.{Card, Dependencies, Kind}
   alias Jarvis2.Herdr.Workspaces
 
   @columns [
@@ -31,6 +31,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
        columns: @columns,
        card: nil,
        feedback: "",
+       selected_dependencies: [],
        worktrees: [],
        worktree_error: false,
        worktree_cwd: nil
@@ -63,22 +64,36 @@ defmodule Jarvis2Web.KanbanLive.Index do
     changeset = Kanban.change_card(%Card{}, attrs)
 
     {:noreply,
-     socket |> assign_form(%{changeset | action: :validate}) |> lookup_worktrees(attrs["cwd"])}
+     socket
+     |> assign(selected_dependencies: selected_dependencies(attrs))
+     |> assign_form(%{changeset | action: :validate})
+     |> lookup_worktrees(attrs["cwd"])}
   end
 
   def handle_event("create", %{"card" => attrs}, socket) do
-    case Kanban.create_card(attrs) do
+    selected = selected_dependencies(attrs)
+
+    result =
+      if selected == [],
+        do: Kanban.create_card(attrs),
+        else: Kanban.create_card_with_dependencies(attrs, selected)
+
+    case result do
       {:ok, _} ->
         cwd = Application.get_env(:jarvis2, :mix_project_dir, File.cwd!())
 
         {:noreply,
          socket
+         |> assign(selected_dependencies: [])
          |> assign_form(Kanban.change_card(%Card{}, %{cwd: cwd, worktree: "main"}))
          |> lookup_worktrees(cwd)
          |> load()}
 
       {:error, changeset} ->
-        {:noreply, assign_form(socket, changeset)}
+        {:noreply,
+         socket
+         |> assign(selected_dependencies: selected)
+         |> assign_form(%{changeset | action: :insert})}
     end
   end
 
@@ -148,6 +163,9 @@ defmodule Jarvis2Web.KanbanLive.Index do
   def handle_info({:card, _}, socket), do: {:noreply, refresh(socket)}
   def handle_info({:run, _}, socket), do: {:noreply, refresh(socket)}
 
+  def handle_info({:arrangement_notice, type, message}, socket),
+    do: {:noreply, socket |> put_flash(type, message) |> refresh()}
+
   defp refresh(socket) do
     socket = load(socket)
 
@@ -157,7 +175,39 @@ defmodule Jarvis2Web.KanbanLive.Index do
     end
   end
 
-  defp load(socket), do: assign(socket, cards: Kanban.list_cards())
+  defp load(socket) do
+    cards = Kanban.list_cards()
+    graphs = cards |> Enum.map(& &1.cwd) |> Enum.uniq() |> Map.new(&{&1, Kanban.graph(&1)})
+
+    states =
+      Map.new(cards, fn card ->
+        edges = Enum.filter(graphs[card.cwd].edges, &(&1.card_id == card.id))
+        {card.id, Dependencies.state_for(card, edges)}
+      end)
+
+    threshold = Settings.get().arrange_nudge_threshold
+
+    nudges =
+      cards
+      |> Enum.filter(&(&1.kind != :arrange and &1.column == :scratch and is_nil(&1.arranged_at)))
+      |> Enum.frequencies_by(& &1.cwd)
+      |> Enum.filter(fn {_cwd, count} -> threshold > 0 and count >= threshold end)
+      |> Enum.sort()
+
+    assign(socket,
+      cards: cards,
+      dependency_states: states,
+      dependency_graphs: graphs,
+      arrange_nudges: nudges
+    )
+  end
+
+  defp selected_dependencies(attrs) do
+    case attrs["blocked_by"] do
+      ids when is_list(ids) -> Enum.reject(ids, &(&1 == ""))
+      _ -> []
+    end
+  end
 
   defp assign_form(socket, changeset), do: assign(socket, form: to_form(changeset, as: :card))
 
@@ -230,7 +280,14 @@ defmodule Jarvis2Web.KanbanLive.Index do
   @impl true
   def render(assigns) do
     ~H"""
-    <h1>Kanban</h1>
+    <p :for={{cwd, count} <- @arrange_nudges} class="banner banner-warn">
+      {count} Scratch cards in {cwd} have not been arranged.
+      <.link navigate={"/kanban/graph?" <> URI.encode_query(%{cwd: cwd})}>Review dependencies</.link>
+    </p>
+    <h1>
+      Kanban
+      <.link navigate={"/kanban/graph?" <> URI.encode_query(%{cwd: Application.get_env(:jarvis2, :mix_project_dir, File.cwd!())})}>Graph</.link>
+    </h1>
     <div id="board" class="kanban-board" phx-hook="Board">
       <section
         :for={{column, label} <- @columns}
@@ -251,7 +308,7 @@ defmodule Jarvis2Web.KanbanLive.Index do
             Type
             <select id={@form[:kind].id} name={@form[:kind].name}>
               <option
-                :for={kind <- Kind.all()}
+                :for={kind <- Kind.creatable()}
                 value={kind}
                 selected={to_string(@form[:kind].value) == to_string(kind)}
               >
@@ -286,13 +343,34 @@ defmodule Jarvis2Web.KanbanLive.Index do
             </datalist>
             <small :if={hint = worktree_hint(@form, @worktrees)}>{hint}</small>
             <small :if={@worktree_error}>Herdr unavailable; worktrees cannot be listed</small>
+            <label>
+              Blocked by <input type="hidden" name="card[blocked_by][]" value="" />
+              <select id="card-blocked-by" name="card[blocked_by][]" multiple>
+                <option
+                  :for={
+                    candidate <-
+                      Enum.filter(@cards, &(&1.cwd == @form[:cwd].value and &1.kind != :arrange))
+                  }
+                  value={candidate.id}
+                  selected={candidate.id in @selected_dependencies}
+                >
+                  {candidate.title} · {candidate.worktree}
+                </option>
+              </select>
+            </label>
+            <p :for={{:blocked_by, {message, _}} <- @form.source.errors} class="field-error">
+              {message}
+            </p>
           </details>
           <button type="submit">Add card</button>
         </.form>
         <article
           :for={card <- Enum.filter(@cards, &(&1.column == column))}
           id={"card-#{card.id}"}
-          class="kanban-card"
+          class={[
+            "kanban-card",
+            elem(@dependency_states[card.id], 0) == :blocked && "dependency-blocked"
+          ]}
           draggable="true"
           data-card-id={card.id}
           data-kind={card.kind}
@@ -300,6 +378,21 @@ defmodule Jarvis2Web.KanbanLive.Index do
         >
           <.link patch={detail_path(card)}>{card.title}</.link>
           <span class="badge kind-badge">{Kind.get(card.kind).label}</span>
+          <span :if={elem(@dependency_states[card.id], 0) == :blocked} class="badge">🔒 Blocked · {length(
+            elem(@dependency_states[card.id], 1)
+          )}</span>
+          <span :if={elem(@dependency_states[card.id], 0) == :ready} class="badge">Ready</span>
+          <span
+            :if={column == :scratch && card.kind != :arrange && is_nil(card.arranged_at)}
+            class="badge"
+          >Unarranged</span>
+          <span
+            :if={elem(@dependency_states[card.id], 0) == :stale}
+            class="badge"
+            title={
+              Enum.map_join(elem(@dependency_states[card.id], 1), ", ", & &1.blocked_by_card.title)
+            }
+          >Stale</span>
           <span :if={length(Kind.stages(card.kind)) > 1} class="badge stage-badge">
             {card.stage |> Atom.to_string() |> String.capitalize()}
           </span>
@@ -346,6 +439,12 @@ defmodule Jarvis2Web.KanbanLive.Index do
         <% _ -> %>
           <p>{@card.body}</p><p>Working directory: <code>{@card.cwd}</code></p>
           <p>Worktree: <code>{@card.worktree}</code></p>
+          <.live_component
+            module={Jarvis2Web.KanbanLive.Dependencies}
+            id={"dependencies-component-#{@card.id}"}
+            card={@card}
+            graph={@dependency_graphs[@card.cwd]}
+          />
           <section :for={round <- Enum.sort_by(@card.rounds, & &1.number)}>
             <h3>Round {round.number} ({round.status})</h3>
             <div :for={q <- round.questions}>
@@ -363,7 +462,14 @@ defmodule Jarvis2Web.KanbanLive.Index do
             <h3>Accepted plan</h3><pre>{@card.accepted_plan}</pre>
           </section>
           <.skill_uses card={@card} />
-          <section :if={@card.deliverable}>
+          <.live_component
+            :if={@card.kind == :arrange && @card.column == :done}
+            module={Jarvis2Web.KanbanLive.ArrangeReview}
+            id={"review-#{@card.id}"}
+            card={@card}
+            graph={@dependency_graphs[@card.cwd]}
+          />
+          <section :if={@card.deliverable && @card.kind != :arrange}>
             <h3>{String.capitalize(Kind.noun(@card.kind, @card.stage))}</h3>
             <%= if Kind.deliverable_type(@card.kind) == :html do %>
               <.slides_viewer :if={@card.column in [:done, :archive]} card={@card} />

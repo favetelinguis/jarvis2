@@ -44,7 +44,40 @@ label.check { display: flex; gap: .6rem; align-items: baseline; }
 .kanban-card[data-kind="explain"] { border-left: .35rem solid #1a9e8f; }
 .kanban-card[data-kind="review"] { border-left: .35rem solid #d6456b; }
 .kanban-card[data-kind="refine"] { border-left: .35rem solid #3d9a40; }
+.kanban-card[data-kind="arrange"] { border-left: .35rem solid #b16cce; }
+.kanban-card.dependency-blocked { opacity: .7; }
 .kanban-card > a { display: block; font-weight: bold; }
+.graph-page { display: grid; grid-template-columns: minmax(0, 1fr) minmax(12rem, 18rem); gap: 1rem; }
+.graph-scroll { overflow: auto; border: 1px solid #8886; }
+.graph-node rect { fill: Canvas; stroke: #888; stroke-width: 3; }
+.graph-node text { fill: CanvasText; font-size: 12px; }
+.graph-node[data-kind="plan"] rect { stroke: #2a7de1; }
+.graph-node[data-kind="research"] rect { stroke: #8e5bd6; }
+.graph-node[data-kind="explain"] rect { stroke: #1a9e8f; }
+.graph-node[data-kind="review"] rect { stroke: #d6456b; }
+.graph-node[data-kind="refine"] rect { stroke: #3d9a40; }
+.graph-node.state-scratch:not(.has-blockers) rect { stroke-width: 4; }
+.graph-node.state-scratch:not(.has-blockers) text:last-child { font-weight: bold; }
+.graph-node.state-scratch.has-blockers rect { fill: url(#blocked-hatch); }
+.graph-node.state-done rect { fill: #2e9e5b44; }
+.graph-node.state-agent rect { fill: #2a7de133; }
+.graph-node.state-awaiting_user rect { fill: #d9822b44; }
+.graph-node.state-archive { opacity: .5; }
+.graph-node.has-blockers:not(.state-scratch) rect { stroke: #d9822b; stroke-width: 5; }
+.graph-node:focus rect, .graph-node:hover rect { stroke-width: 5; }
+.graph-edge { fill: none; stroke: #888; stroke-width: 2; }
+.graph-edge.satisfied { stroke: #2e9e5b; }
+.graph-edge.related { stroke: #2a7de1; stroke-width: 4; }
+.graph-node.dimmed, .graph-edge.dimmed { opacity: .2; }
+.graph-node.related rect { stroke: #2a7de1; stroke-width: 5; }
+.graph-proposal { fill: none; stroke: #2a7de1; stroke-width: 3; stroke-dasharray: 6 4; }
+.graph-proposal.proposal-invalid { stroke: #d9382b; }
+#arrangement-review { display: grid; gap: .5rem; margin: 1rem 0; }
+#arrangement-review label:target { outline: 2px solid #2a7de1; }
+.arrange-emphasis { outline: 2px solid #2a7de1; font-weight: bold; }
+#graph-arrow { fill: #888; }
+#dependency-graph text { font-size: 12px; fill: CanvasText; }
+#graph-filters { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .kanban-panel { margin-top: 1rem; padding: 1rem; border: 1px solid #8886; border-radius: .5rem; }
 .kanban-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .kanban-panel textarea { width: min(100%, 40rem); min-height: 6rem; }

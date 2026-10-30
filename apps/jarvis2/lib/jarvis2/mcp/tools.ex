@@ -55,13 +55,57 @@ defmodule Jarvis2.MCP.Tools do
     attrs = %{title: value(args, :title), body: value(args, :body), cwd: value(args, :cwd)}
     attrs = if kind = value(args, :kind), do: Map.put(attrs, :kind, kind), else: attrs
 
-    case Kanban.create_card(attrs) do
+    blocked_by = value(args, :blocked_by)
+
+    result =
+      if is_nil(blocked_by) do
+        Kanban.create_card(attrs)
+      else
+        Kanban.create_card_with_dependencies(attrs, blocked_by,
+          needs: value(args, :needs) || :done,
+          source: :harness
+        )
+      end
+
+    case result do
       {:ok, card} ->
         {:ok, %{id: card.id, column: card.column, kind: card.kind, cwd: card.cwd}}
 
       {:error, changeset} ->
         fields = changeset.errors |> Keyword.keys() |> Enum.uniq() |> Enum.join(", ")
         {:error, "invalid card fields: #{fields}"}
+    end
+  end
+
+  def call("list_ready_cards", args, _caller) do
+    cards = Kanban.ready(value(args, :cwd))
+
+    {:ok,
+     %{
+       cards:
+         Enum.map(cards, &%{id: &1.id, title: &1.title, kind: &1.kind, worktree: &1.worktree})
+     }}
+  end
+
+  def call("add_dependency", args, _caller) do
+    with {:ok, card, prerequisite} <- dependency_cards(args),
+         {:ok, _} <-
+           Kanban.add_dependency(card, prerequisite,
+             needs: value(args, :needs) || :done,
+             source: :harness
+           ) do
+      {:ok, %{ok: true}}
+    else
+      {:error, reason} -> {:error, "invalid dependency: #{reason}"}
+    end
+  end
+
+  def call("remove_dependency", args, _caller) do
+    with {:ok, card, prerequisite} <- dependency_cards(args),
+         {:ok, _} <- Kanban.remove_dependency(card, prerequisite, source: :harness) do
+      {:ok, %{ok: true}}
+    else
+      {:error, reason} -> {:error, "invalid dependency: #{reason}"}
     end
   end
 
@@ -311,6 +355,15 @@ defmodule Jarvis2.MCP.Tools do
   defp ticket_status(question) do
     base = %{ticket: question.id, status: Atom.to_string(question.status)}
     if question.status == :answered, do: Map.put(base, :answer, question.answer), else: base
+  end
+
+  defp dependency_cards(args) do
+    with %Jarvis2.Kanban.Card{} = card <- Kanban.get_card(value(args, :card)),
+         %Jarvis2.Kanban.Card{} = prerequisite <- Kanban.get_card(value(args, :blocked_by)) do
+      {:ok, card, prerequisite}
+    else
+      _ -> {:error, "card not found"}
+    end
   end
 
   defp value(args, key), do: Map.get(args, key, Map.get(args, Atom.to_string(key)))

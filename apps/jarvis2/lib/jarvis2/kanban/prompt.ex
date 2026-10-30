@@ -27,9 +27,79 @@ defmodule Jarvis2.Kanban.Prompt do
         "\n\nCard: " <>
         card.title <>
         "\nIdea: " <>
-        (card.body || "") <> "\n" <> feedback_text(feedback, opts) <> deck
+        (card.body || "") <> "\n" <> feedback_text(feedback, opts) <> deck <> snapshot(card)
 
-    base <> optional_context(card, history, max(0, budget - byte_size(base)))
+    prerequisites =
+      prerequisites(
+        card,
+        opts[:prerequisites] || [],
+        min(12_288, max(0, budget - byte_size(base)))
+      )
+
+    base <>
+      prerequisites <>
+      optional_context(card, history, max(0, budget - byte_size(base) - byte_size(prerequisites)))
+  end
+
+  defp snapshot(%{kind: :arrange, arrange_snapshot: snapshot}) when is_map(snapshot),
+    do: "\n## Arrangement snapshot (JSON)\n" <> Jason.encode!(snapshot) <> "\n"
+
+  defp snapshot(_), do: ""
+
+  defp prerequisites(_card, [], _budget), do: ""
+
+  defp prerequisites(card, edges, budget) do
+    header = "\n## Prerequisites\n"
+    items = Enum.map(edges, &prerequisite_item(&1, card))
+    metadata = Enum.sum(Enum.map(items, fn {heading, _} -> byte_size(heading) + 1 end))
+    available = budget - byte_size(header) - metadata
+
+    cond do
+      budget < byte_size(header) ->
+        ""
+
+      available >= 0 ->
+        per_result = min(4_096, div(available, length(items)))
+
+        header <>
+          Enum.map_join(items, fn {heading, result} ->
+            heading <> truncate(result, per_result) <> "\n"
+          end)
+
+      true ->
+        truncated_prerequisites(items, card, header, budget)
+    end
+  end
+
+  defp truncated_prerequisites(items, card, header, budget) do
+    notice = "\nAdditional prerequisites omitted; see /kanban/cards/#{card.id}.\n"
+    remaining = max(0, budget - byte_size(header) - byte_size(notice))
+
+    headings =
+      Enum.reduce_while(items, "", fn {heading, _}, acc ->
+        if byte_size(acc) + byte_size(heading) <= remaining,
+          do: {:cont, acc <> heading},
+          else: {:halt, acc}
+      end)
+
+    truncate(header <> headings <> notice, budget)
+  end
+
+  defp prerequisite_item(edge, card) do
+    prerequisite = edge.blocked_by_card
+
+    note =
+      if prerequisite.worktree != card.worktree,
+        do: " Its code is in worktree `#{prerequisite.worktree}`; it is not in your checkout.",
+        else: ""
+
+    heading =
+      "\n- #{prerequisite.title} (#{Kind.get(prerequisite.kind).label} · #{prerequisite.worktree}, needs #{edge.needs}).#{note}\nRead /kanban/cards/#{prerequisite.id} for more.\n"
+
+    result =
+      if edge.needs == :plan, do: prerequisite.accepted_plan, else: prerequisite.deliverable
+
+    {heading, result || ""}
   end
 
   defp optional_context(card, history, history_budget) do

@@ -20,6 +20,8 @@ defmodule Jarvis2.Kanban.Card do
     field :deliverable, :string
     field :accepted_plan, :string
     field :stage_started_at, :utc_datetime_usec
+    field :arranged_at, :utc_datetime_usec
+    field :arrange_snapshot, :map
     belongs_to :run, Jarvis2.Runs.Run, type: :binary_id
     has_many :rounds, Jarvis2.Kanban.Round
     has_many :feedback, Jarvis2.Kanban.Feedback
@@ -35,6 +37,7 @@ defmodule Jarvis2.Kanban.Card do
       if is_binary(value), do: String.trim(value), else: value
     end)
     |> validate_required([:title, :cwd, :kind, :worktree])
+    |> validate_inclusion(:kind, Kind.creatable())
     |> validate_change(:worktree, fn :worktree, value ->
       if Jarvis2.Herdr.Workspaces.valid_worktree?(value), do: [], else: [worktree: "is invalid"]
     end)
@@ -44,6 +47,15 @@ defmodule Jarvis2.Kanban.Card do
     |> validate_length(:title, max: 120, count: :bytes)
     |> validate_body()
     |> Jarvis2.Runs.Run.validate_cwd()
+  end
+
+  def arrange_changeset(cwd, snapshot) do
+    %__MODULE__{}
+    |> changeset(%{title: "Arrange dependencies", cwd: cwd})
+    |> put_change(:kind, :arrange)
+    |> put_change(:stage, :main)
+    |> put_change(:arrange_snapshot, snapshot)
+    |> unique_constraint(:cwd, name: :cards_one_open_arrange_per_project)
   end
 
   defp blank_worktree(changeset, attrs) do

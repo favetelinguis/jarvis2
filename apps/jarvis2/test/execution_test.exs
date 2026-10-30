@@ -87,6 +87,109 @@ defmodule Jarvis2.ExecutionTest do
     %{port: port, fixture: fixture, mirror: mirror, view: view}
   end
 
+  test "arrange snapshots a capped pass and applies only reviewed valid dependencies" do
+    alias Jarvis2.{Kanban, Repo}
+
+    cards =
+      for n <- 1..52 do
+        {:ok, card} =
+          Kanban.create_card(%{
+            title: "Card #{n}",
+            body: String.duplicate("b", 400),
+            cwd: File.cwd!()
+          })
+
+        card
+      end
+
+    [a, b, c | _] = cards
+    assert {:error, _} = Kanban.create_card(%{title: "Fake arrange", kind: :arrange, cwd: a.cwd})
+    {:ok, _} = Kanban.add_dependency(c, a)
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, Jarvis2.Runs.topic())
+    assert {:ok, arrange} = Kanban.start_arrange(a.cwd)
+    await_failed_launch(arrange.run_id)
+    assert arrange.kind == :arrange
+    assert arrange.column == :agent
+    assert arrange.run.task =~ "Arrangement snapshot"
+    assert arrange.run.task =~ a.id
+    assert length(arrange.arrange_snapshot["considered"]) == 50
+    assert Enum.take(arrange.arrange_snapshot["considered"], 3) == Enum.map([a, b, c], & &1.id)
+    assert Enum.all?(arrange.arrange_snapshot["cards"], &(byte_size(&1["body"] || "") <= 300))
+    assert {:error, _} = Kanban.start_arrange(a.cwd)
+    assert {:error, _} = Kanban.submit_deliverable(arrange.run_id, "not json")
+
+    proposal =
+      Jason.encode!(%{
+        considered: Enum.map([a, b, c], & &1.id),
+        edges: [
+          %{card: b.id, blocked_by: a.id, needs: "done", reason: "Uses A"},
+          %{card: a.id, blocked_by: c.id, needs: "done", reason: "Cycle"},
+          %{card: c.id, blocked_by: a.id, needs: "done", reason: "Already exists"}
+        ]
+      })
+
+    assert {:ok, _} = Kanban.submit_deliverable(arrange.run_id, proposal)
+    arrange = Kanban.get_card(arrange.id)
+    assert {:ok, reopened} = Kanban.reopen(arrange, "Please reconsider the proposed edges.")
+    assert reopened.column == :agent
+    await_failed_launch(reopened.run_id)
+    assert {:ok, _} = Kanban.submit_deliverable(reopened.run_id, proposal)
+    arrange = Kanban.get_card(arrange.id)
+    review = Kanban.arrangement_review(arrange)
+    assert Enum.count(review.edges, &is_nil(&1.error)) == 1
+    assert {:ok, %{applied: 1, skipped: skipped}} = Kanban.apply_arrangement(arrange, [0, 1, 2])
+    assert length(skipped) == 2
+    assert Kanban.get_card(arrange.id).column == :archive
+    assert Kanban.get_card(a.id).arranged_at
+    assert Kanban.get_card(b.id).arranged_at
+    assert Kanban.get_card(c.id).arranged_at
+    assert is_nil(Kanban.get_card(Enum.at(cards, 50).id).arranged_at)
+    assert {:blocked, [%{source: :arranger}]} = Kanban.dependency_state(b)
+    assert {:blocked, [%{source: :human}]} = Kanban.dependency_state(c)
+    assert {:error, _} = Kanban.apply_arrangement(arrange, [0])
+    assert Repo.get!(Jarvis2.Kanban.Card, a.id).arranged_at
+  end
+
+  test "re-arrange preserves human and harness edges and acceptance revalidates started cards" do
+    alias Jarvis2.{Kanban, Repo}
+    cwd = File.cwd!()
+    {:ok, a} = Kanban.create_card(%{title: "A", cwd: cwd})
+    {:ok, b} = Kanban.create_card(%{title: "B", cwd: cwd})
+    {:ok, c} = Kanban.create_card(%{title: "C", cwd: cwd})
+    {:ok, d} = Kanban.create_card(%{title: "D", cwd: cwd})
+    {:ok, _} = Kanban.add_dependency(b, a, source: :human)
+    {:ok, _} = Kanban.add_dependency(c, a, source: :harness)
+    {:ok, _} = Kanban.add_dependency(d, a, source: :arranger)
+
+    for card <- [a, b, c, d],
+        do: card |> Ecto.Changeset.change(arranged_at: DateTime.utc_now()) |> Repo.update!()
+
+    Phoenix.PubSub.subscribe(Jarvis2.PubSub, Jarvis2.Runs.topic())
+    assert {:ok, arrange} = Kanban.start_arrange(cwd, rearrange: true)
+    await_failed_launch(arrange.run_id)
+    assert Enum.map(Kanban.graph(cwd).edges, & &1.source) |> Enum.sort() == [:harness, :human]
+    assert Enum.all?([a, b, c, d], &is_nil(Kanban.get_card(&1.id).arranged_at))
+    unknown = Ecto.UUID.generate()
+
+    proposal =
+      Jason.encode!(%{
+        considered: [a.id, b.id, c.id, d.id],
+        edges: [
+          %{card: d.id, blocked_by: c.id, needs: "done", reason: "uses C"},
+          %{card: b.id, blocked_by: unknown, needs: "done", reason: "unknown"}
+        ]
+      })
+
+    assert {:ok, _} = Kanban.submit_deliverable(arrange.run_id, proposal)
+    arrange = Kanban.get_card(arrange.id)
+    assert Enum.at(Kanban.arrangement_review(arrange).edges, 1).error
+    d |> Ecto.Changeset.change(column: :agent) |> Repo.update!()
+    assert {:ok, %{applied: 0, skipped: [_, _]}} = Kanban.apply_arrangement(arrange, [0, 1])
+    assert is_nil(Kanban.get_card(d.id).arranged_at)
+    assert Kanban.get_card(a.id).arranged_at
+    assert Enum.sort(Enum.map(Kanban.graph(cwd).edges, & &1.source)) == [:harness, :human]
+  end
+
   test "discovers guarded tools and refuses disabled scenarios without mutations", ctx do
     h = session(ctx)
 
@@ -320,6 +423,10 @@ defmodule Jarvis2.ExecutionTest do
 
     assert result["prompt_status"] == "skipped"
     refute_receive {:request, "agent.prompt", _}, 150
+  end
+
+  defp await_failed_launch(id) do
+    assert_receive {:run, %{id: ^id, status: :failed}}, 5_000
   end
 
   defp respond("session.snapshot", _, fixture, _),

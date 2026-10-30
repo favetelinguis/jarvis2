@@ -8,8 +8,33 @@ Control plane that runs Pi agents on kanban cards inside a dedicated Herdr sessi
 A unit of work on the kanban board, created from an idea and worked on by agent runs.
 _Avoid_: ticket, task, issue
 
+**Dependency**:
+A blocking edge from a dependent card to a prerequisite in the same project (`cwd`).
+_Avoid_: link, task dependency
+
+**Prerequisite**:
+The card a dependency points at; the other card is its dependent.
+
+**Blocked**:
+A Scratch card with an unsatisfied prerequisite. A Scratch card with no unsatisfied prerequisites is **ready**.
+
+**Satisfied**:
+A prerequisite is Done (for a Plan card, after Implementation), or has an accepted plan when the dependency needs a plan. Archived or never-run cards do not satisfy dependencies.
+
+**Stale**:
+A started card whose prerequisite is no longer satisfied.
+
+**Arrange**:
+An agent run on an Arrange card that proposes dependencies for human review.
+
+**Arranged**:
+A card considered by an accepted arrangement while in Scratch, whether or not any proposed edges were accepted.
+
+**Graph**:
+The project dependency view at `/kanban/graph`.
+
 **Kind**:
-The type of a card (Plan, Research, Explain, Review, Refine, Slides, Architecture). It fixes the card's stages, question limit and deliverable type.
+The type of a card (Plan, Research, Explain, Review, Refine, Slides, Architecture, Arrange). It fixes the card's stages, question limit and deliverable type.
 _Avoid_: card type, task type
 
 **Stage**:

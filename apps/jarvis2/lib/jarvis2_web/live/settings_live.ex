@@ -73,6 +73,11 @@ defmodule Jarvis2Web.SettingsLive do
         <.field field={@form[:default_model]} label="Model" />
         <.field field={@form[:default_thinking]} label="Thinking" type="select" options={@levels} />
       </fieldset>
+      <fieldset>
+        <legend>Card dependencies</legend>
+        <.field field={@form[:arrange_nudge_threshold]} type="number" label="Arrange nudge threshold" />
+        <small>Show a nudge on the board when this many cards in a project are not arranged. 0 turns it off.</small>
+      </fieldset>
       <button type="submit">Save</button>
     </.form>
 

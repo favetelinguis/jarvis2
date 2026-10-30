@@ -1,0 +1,5 @@
+# Dependencies are acyclic blocking edges within a project
+
+A dependency points from a dependent card to a prerequisite in the same `cwd`, including across worktrees. The graph is acyclic. A dependency needs either a completed card or, for a Plan card, an accepted plan. Archived prerequisites are not satisfied. Starting a Scratch card is refused while any prerequisite is unsatisfied; if one later becomes unsatisfied, the started card is stale rather than stopped. Edges can be edited only while the dependent is in Scratch.
+
+This keeps starting manual and avoids silently stopping work after the human reopens a prerequisite, at the cost of requiring the human to resolve stale work. Prerequisite results are passed as bounded text; worktree code is not shared automatically. Harnesses may create and remove their own edges but cannot remove human edges. Arrange considers at most 50 oldest unarranged Scratch cards per pass and proposes edges for human review; it never applies them autonomously. Re-arranging clears only arranger-created edges on Scratch cards.

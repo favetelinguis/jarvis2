@@ -109,7 +109,7 @@ defmodule Jarvis2.KanbanTest do
   end
 
   test "stages are assigned by kind and cannot be supplied by the caller" do
-    for kind <- Jarvis2.Kanban.Kind.all() do
+    for kind <- Jarvis2.Kanban.Kind.creatable() do
       {:ok, card} =
         Kanban.create_card(%{title: "x", cwd: File.cwd!(), kind: kind, stage: :implementation})
 

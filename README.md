@@ -74,8 +74,9 @@ entries):
 Use the configured `JARVIS2_PORT` if it differs. Restart Pi or run `/reload` after changing its
 configuration. Jarvis2 must be running. Pi supplies its session working directory explicitly; the
 server requires an existing absolute directory. The card is created in Scratch, defaults to Plan,
-and does not start an agent. Other kinds can be requested. The board endpoint advertises only
-`create_card`; the full unauthenticated `/mcp` endpoint remains available to local processes.
+and does not start an agent. Other kinds can be requested. The board endpoint also provides
+`list_ready_cards`, `add_dependency` and `remove_dependency`; it can remove only harness-created
+edges. The full unauthenticated `/mcp` endpoint remains available to local processes.
 
 ## Screens
 
@@ -83,6 +84,7 @@ and does not start an agent. Other kinds can be requested. The board endpoint ad
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `/`                               | Dashboard: connection, workspace → tab → pane tree, agents, worktrees, layout diff, recent events |
 | `/kanban` | Deliverables board; archive cards to close their tab and restore with a reason and Pi session reload |
+| `/kanban/graph` | Project dependencies, ready cards and worktree lanes |
 | `/inbox`                          | Every pending question and approval, with a count badge in the navigation                                                             |
 | `/blackboard`                     | Notes shared between agents and you (JSON values)                                                                                     |
 | `/events`                         | The journal, filterable by source, type prefix and run                                                                                |
@@ -94,7 +96,7 @@ Every page except `/login`, `/healthz`, `/status`, `/mcp` and `/mcp/board` needs
 
 ## MCP tools
 
-The MCP endpoints (`/mcp` and the one-tool `/mcp/board`, streamable HTTP) are unauthenticated. Run-only tools resolve the active run
+The MCP endpoints (`/mcp` and `/mcp/board`, streamable HTTP) are unauthenticated. Run-only tools resolve the active run
 from the pane header. Agent state comes from Herdr; pending questions and approvals appear in `/inbox`, even while Herdr shows the agent as working. Every tool has a UI surface
 or is agent-only:
 
@@ -103,6 +105,7 @@ or is agent-only:
 | `whoami`, `log`, `wait_for_event`, `notify_human`  | agent-only (calls appear in `/events`)                                  |
 | `blackboard_put/get/list`                          | `/blackboard`                                                           |
 | `create_card` | creates a Scratch card on `/kanban`; no run identity required |
+| `list_ready_cards`, `add_dependency`, `remove_dependency` | board endpoint only; dependencies on `/kanban` and `/kanban/graph` |
 | `list_agents`, `get_layout`, `list_worktrees`      | `/`                                                                     |
 | `read_agent`                                       | agent-only                                                              |
 | `prompt_agent`, `spawn_agent`, `run_command`       | `fleet.*` rows in `/events`                                             |
@@ -122,6 +125,19 @@ prompts preserve the reason, idea and role instructions; optional history and pr
 be truncated. The entire agent prompt is limited to 65,536 bytes. If
 mandatory content does not fit, the step is refused. If the saved Pi session is missing, Pi starts a
 fresh session with that context.
+
+A Scratch card can depend on other cards in the same project, including cards in another worktree.
+The board and graph refuse to start it until its prerequisites are satisfied. A Plan prerequisite can
+be needed as an accepted plan or as a completed implementation. Archived prerequisites do not satisfy
+a dependency. Reopening a prerequisite does not stop a dependent already running; it is marked stale.
+Prerequisite results are passed as bounded text, not as code shared across worktrees.
+
+On the graph page, **Arrange** explicitly starts a read-only-prompted agent to propose dependencies
+for up to 50 oldest unarranged Scratch cards. Review and select the proposed edges before accepting;
+dismissing changes nothing. Re-arrange removes only arranger-created edges on Scratch cards, never
+human or harness edges. The nudge threshold in Settings defaults to 3; 0 disables the nudge. The
+arranger's read-only restriction is a prompt instruction, **not a sandbox**: it runs with the same
+machine access as other Pi agents.
 
 Plan cards have Planning and Implementation stages. Once a plan is Done, **Accept plan** overwrites
 `PLAN.md` in the planner run's checkout (the chosen worktree, if any) and starts a new implementer pane in the same tab (or a new
@@ -185,7 +201,7 @@ their deliverable (a plan's Language and Decisions sections), and the implemente
 - **MCP identity is unauthenticated.** `X-Herdr-Pane` selects an active run, including one that has
   submitted a result. Any local process can claim another pane and call MCP tools or answer for its run.
   This also permits asking kanban questions, submitting a deliverable, or starting model-spending subagents when enabled.
-  Any local process can create Scratch cards through MCP without a pane identity.
+  Any local process can create Scratch cards and manage harness-created dependencies through the board MCP endpoint without a pane identity.
   A fresh mirror checks the recorded terminal against the pane. Loopback binding, Host and Origin checks,
   scenario gates, execution/prompt guards and rate limits remain in place.
 - **Guarded UI and MCP.** UI run actions act as the system caller `ui` through the execution and prompt

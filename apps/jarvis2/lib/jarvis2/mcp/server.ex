@@ -11,8 +11,25 @@ defmodule Jarvis2.MCP.Server do
                  title: {:required, :string},
                  body: :string,
                  cwd: {:required, :string},
-                 kind: {:enum, Enum.map(Jarvis2.Kanban.Kind.all(), &Atom.to_string/1)}
+                 kind: {:enum, Enum.map(Jarvis2.Kanban.Kind.creatable(), &Atom.to_string/1)}
                }}
+
+  @board_tools [
+    {"create_card", elem(@board_tool, 1),
+     Map.merge(elem(@board_tool, 2), %{
+       blocked_by: {:list, :string},
+       needs: {:enum, ["done", "plan"]}
+     })},
+    {"list_ready_cards", "List ready Scratch cards in a project.", %{cwd: {:required, :string}}},
+    {"add_dependency", "Add a dependency to a Scratch card.",
+     %{
+       card: {:required, :string},
+       blocked_by: {:required, :string},
+       needs: {:enum, ["done", "plan"]}
+     }},
+    {"remove_dependency", "Remove a harness-created dependency.",
+     %{card: {:required, :string}, blocked_by: {:required, :string}}}
+  ]
 
   @tools [
     {"whoami", "Resolve your Herdr pane identity.", %{}},
@@ -97,7 +114,7 @@ defmodule Jarvis2.MCP.Server do
     {:ok, frame}
   end
 
-  def register_board_tool(frame), do: register_tool(@board_tool, frame)
+  def register_board_tool(frame), do: Enum.reduce(@board_tools, frame, &register_tool/2)
 
   defp register_tool({name, description, schema}, frame) do
     Frame.register_tool(frame, name,
@@ -216,6 +233,21 @@ defmodule Jarvis2.MCP.Server do
   defp outcome({:reply, %{"isError" => true}, _}), do: "error"
   defp outcome({:reply, _, _}), do: "ok"
   defp outcome(_), do: "error"
+
+  defp dispatch_tool_request(
+         %{"params" => %{"name" => "create_card", "arguments" => args}} = request,
+         frame,
+         __MODULE__
+       )
+       when is_map(args) do
+    if Map.has_key?(args, "blocked_by") or Map.has_key?(args, "needs") do
+      {:error,
+       Anubis.MCP.Error.protocol(:invalid_params, %{message: "runs cannot edit dependencies"}),
+       frame}
+    else
+      Handlers.handle(request, __MODULE__, frame)
+    end
+  end
 
   defp dispatch_tool_request(
          %{"params" => %{"name" => "blackboard_put", "arguments" => args}} = request,

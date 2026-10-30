@@ -103,6 +103,22 @@ defmodule Jarvis2.Kanban.Kind do
         }
       ]
     },
+    arrange: %{
+      label: "Arrange",
+      hint: "Created from the graph page",
+      max_questions: 4,
+      max_body: 4_000,
+      deliverable: :edges,
+      stages: [
+        %{
+          name: :main,
+          noun: "dependency proposals",
+          advance: nil,
+          max_deliverable: 60_000,
+          role: "arranger"
+        }
+      ]
+    },
     refine: %{
       label: "Refine",
       hint: "Paste the Jira ticket text",
@@ -120,7 +136,8 @@ defmodule Jarvis2.Kanban.Kind do
     }
   }
 
-  def all, do: [:plan, :research, :explain, :review, :refine, :slides, :architecture]
+  def all, do: [:plan, :research, :explain, :review, :refine, :slides, :architecture, :arrange]
+  def creatable, do: all() -- [:arrange]
   def get(kind), do: Map.fetch!(@kinds, kind)
   def deliverable_type(kind), do: Map.get(get(kind), :deliverable, :markdown)
   def stages(kind), do: get(kind).stages

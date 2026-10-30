@@ -5,7 +5,19 @@ defmodule Jarvis2.Kanban do
   alias Jarvis2.{Journal, Repo, Runs, StepRoles}
   alias Jarvis2.Herdr.Actions
   alias Jarvis2.Herdr.Mirror
-  alias Jarvis2.Kanban.{Card, Feedback, Kind, Prompt, Round, SkillUse, Slides}
+
+  alias Jarvis2.Kanban.{
+    Arrange,
+    Card,
+    Dependencies,
+    Feedback,
+    Kind,
+    Prompt,
+    Round,
+    SkillUse,
+    Slides
+  }
+
   alias Jarvis2.Runs.{Launcher, Run}
 
   def topic, do: "kanban"
@@ -46,6 +58,172 @@ defmodule Jarvis2.Kanban do
       changed(card, "kanban.created")
       {:ok, card}
     end
+  end
+
+  def create_card_with_dependencies(attrs, blocked_by, opts \\ []) when is_list(blocked_by) do
+    attrs = Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
+
+    attrs =
+      Map.put_new(attrs, "cwd", Application.get_env(:jarvis2, :mix_project_dir, File.cwd!()))
+
+    changeset = Card.changeset(%Card{}, attrs)
+
+    create_with_dependencies(changeset, blocked_by, opts)
+  end
+
+  defp create_with_dependencies(%{valid?: false} = changeset, _ids, _opts),
+    do: {:error, changeset}
+
+  defp create_with_dependencies(changeset, blocked_by, opts) do
+    result =
+      Dependencies.lock(Ecto.Changeset.get_field(changeset, :cwd), fn ->
+        Repo.transaction(fn -> insert_card_with_dependencies!(changeset, blocked_by, opts) end)
+      end)
+
+    case result do
+      {:ok, card} ->
+        changed(card, "kanban.created")
+        {:ok, card}
+
+      {:error, reason} ->
+        {:error, Ecto.Changeset.add_error(changeset, :blocked_by, reason)}
+    end
+  end
+
+  defp insert_card_with_dependencies!(changeset, ids, opts) do
+    card = Repo.insert!(changeset)
+
+    Enum.each(ids, fn id ->
+      case get_card(id) do
+        nil -> Repo.rollback("unknown prerequisite")
+        prerequisite -> Dependencies.add!(card, prerequisite, opts)
+      end
+    end)
+
+    if opts[:source] == :harness do
+      card |> Ecto.Changeset.change(arranged_at: DateTime.utc_now()) |> Repo.update!()
+    else
+      card
+    end
+  end
+
+  def add_dependency(card, prerequisite, opts \\ []) do
+    case Dependencies.add(card, prerequisite, opts) do
+      {:ok, _} = result ->
+        changed(get_card(card.id), "kanban.dependency_added")
+        result
+
+      error ->
+        error
+    end
+  end
+
+  def remove_dependency(card, prerequisite, opts \\ []) do
+    case Dependencies.remove(card, prerequisite, opts) do
+      {:ok, _} = result ->
+        changed(get_card(card.id), "kanban.dependency_removed")
+        result
+
+      error ->
+        error
+    end
+  end
+
+  defdelegate dependency_state(card), to: Dependencies, as: :state
+  defdelegate blockers(card), to: Dependencies
+  defdelegate graph(cwd), to: Dependencies
+  defdelegate ready(cwd), to: Dependencies
+
+  def start_arrange(cwd, opts \\ []) when is_binary(cwd) do
+    Dependencies.lock(cwd, fn -> start_arrange_locked(cwd, opts) end)
+  end
+
+  defp start_arrange_locked(cwd, opts) do
+    with :ok <- availability(),
+         {:ok, {id, run, item}} <- Repo.transaction(fn -> create_arrange!(cwd, opts) end) do
+      card = get_card(id)
+      changed(card, "kanban.arrange_started")
+      launch(run, item, id, card.title)
+      {:ok, card}
+    end
+  end
+
+  defp create_arrange!(cwd, opts) do
+    if Repo.exists?(
+         from c in Card, where: c.cwd == ^cwd and c.kind == :arrange and c.column != :archive
+       ),
+       do: Repo.rollback("An arrangement is already open for this project.")
+
+    if opts[:rearrange], do: Arrange.reset!(cwd)
+    snapshot = Arrange.snapshot(cwd)
+    if snapshot["considered"] == [], do: Repo.rollback("There are no unarranged Scratch cards.")
+
+    card =
+      case cwd |> Card.arrange_changeset(snapshot) |> Repo.insert() do
+        {:ok, card} -> card
+        {:error, _} -> Repo.rollback("Could not create arrangement; one may already be open.")
+      end
+
+    card |> Ecto.Changeset.change(column: :agent) |> Repo.update!()
+    card = get_card(card.id)
+    {:launch, run, item} = create_agent!(card, nil, nil, :scratch)
+    {card.id, run, item}
+  end
+
+  def retry_arrange(%Card{kind: :arrange} = card) do
+    current = get_card(card.id)
+
+    cond do
+      is_nil(current) or current.column not in [:scratch, :agent] ->
+        {:error, "This arrangement cannot be retried."}
+
+      current.column == :agent and
+          (is_nil(current.run) or current.run.status not in [:failed, :lost, :stopped]) ->
+        {:error, "The arrangement is still running."}
+
+      current.column == :agent ->
+        with {:ok, scratch} <- move(current, :scratch), do: move(scratch, :agent)
+
+      true ->
+        move(current, :agent)
+    end
+  end
+
+  def retry_arrange(_), do: {:error, "This is not an arrangement."}
+
+  def arrangement_review(card) do
+    case Arrange.review(card) do
+      {:ok, review} -> review
+      _ -> nil
+    end
+  end
+
+  def apply_arrangement(%Card{} = card, selected) do
+    case get_card(card.id) do
+      nil ->
+        {:error, "Arrangement not found."}
+
+      current ->
+        apply_arrangement_current(current, selected)
+    end
+  end
+
+  defp apply_arrangement_current(current, selected) do
+    result =
+      Dependencies.lock(current.cwd, fn ->
+        Repo.transaction(fn ->
+          result = Arrange.apply!(current, selected)
+          stop_if_active!(get_card(current.id).run)
+          result
+        end)
+      end)
+
+    case result do
+      {:ok, _} -> changed(get_card(current.id), "kanban.arrangement_applied")
+      _ -> :ok
+    end
+
+    result
   end
 
   def report_skill(run_id, name, reason) do
@@ -213,6 +391,7 @@ defmodule Jarvis2.Kanban do
       not is_binary(content) or String.trim(content) == "" -> {:error, "Invalid deliverable."}
       byte_size(content) > max -> {:error, "Deliverable exceeds #{max} bytes; shorten it."}
       Kind.deliverable_type(card.kind) == :html -> Slides.validate(content)
+      card.kind == :arrange -> Arrange.validate(content, card.arrange_snapshot)
       true -> :ok
     end
   end
@@ -357,7 +536,11 @@ defmodule Jarvis2.Kanban do
   defp placement(_), do: :tab
 
   def move(%Card{column: :scratch} = card, to) when to in [:agent, "agent"] do
-    with :ok <- availability(), do: start_or_resume(card, :scratch, nil)
+    Dependencies.lock(card.cwd, fn ->
+      with :ok <- check_blockers(card),
+           :ok <- availability(),
+           do: start_or_resume(card, :scratch, nil)
+    end)
   end
 
   def move(%Card{column: :archive}, _to),
@@ -374,6 +557,24 @@ defmodule Jarvis2.Kanban do
   end
 
   def move(%Card{}, _to), do: {:error, "That move is not allowed."}
+
+  defp check_blockers(card) do
+    case Dependencies.blockers(card) do
+      [] ->
+        :ok
+
+      edges ->
+        names = Enum.map_join(edges, ", ", &"#{&1.blocked_by_card.title} (needs #{&1.needs})")
+        {:error, "Blocked by: " <> names}
+    end
+  end
+
+  defp check_blockers!(card) do
+    case check_blockers(card) do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
 
   defp stop_and_move(card, target, from) do
     transaction(
@@ -407,6 +608,9 @@ defmodule Jarvis2.Kanban do
 
   defp stop_if_active!(_), do: :ok
 
+  def reopen(%Card{kind: :arrange, column: :archive}, _text),
+    do: {:error, "Start a new arrangement instead of restoring an archived one."}
+
   def reopen(%Card{column: column} = card, text)
       when column in [:done, :archive] and is_binary(text) do
     if Actions.valid_prompt_characters?(text),
@@ -435,6 +639,8 @@ defmodule Jarvis2.Kanban do
     result =
       transaction(
         fn ->
+          if from == :scratch, do: check_blockers!(card)
+
           transition!(card.id, from, :agent)
           current = get_card(card.id)
           if from == :archive, do: mark_stale_delivered(card.id)
@@ -536,7 +742,13 @@ defmodule Jarvis2.Kanban do
 
   defp prepare_run(card, feedback, restored) do
     with {:ok, role} <- StepRoles.resolve(card.kind, card.stage) do
-      task = Prompt.build(card, card.rounds, feedback, role: role, restored: restored)
+      task =
+        Prompt.build(card, card.rounds, feedback,
+          role: role,
+          restored: restored,
+          prerequisites: Dependencies.edges(card)
+        )
+
       name = String.slice(card.title, 0, 64)
       text = Jarvis2.Runs.Prompt.build(%{name: name, task: task})
 

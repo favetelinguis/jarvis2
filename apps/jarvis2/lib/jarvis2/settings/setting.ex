@@ -9,14 +9,30 @@ defmodule Jarvis2.Settings.Setting do
     field :default_kind, :string, default: "pi"
     field :default_model, :string, default: "openrouter/openai/gpt-6-luna"
     field :default_thinking, :string, default: "low"
+    field :arrange_nudge_threshold, :integer, default: 3
 
     timestamps(type: :utc_datetime_usec)
   end
 
   def changeset(setting, attrs, known_scenarios) do
     setting
-    |> cast(attrs, [:scenarios, :default_kind, :default_model, :default_thinking])
-    |> validate_required([:default_kind, :default_model, :default_thinking])
+    |> cast(attrs, [
+      :scenarios,
+      :default_kind,
+      :default_model,
+      :default_thinking,
+      :arrange_nudge_threshold
+    ])
+    |> validate_required([
+      :default_kind,
+      :default_model,
+      :default_thinking,
+      :arrange_nudge_threshold
+    ])
+    |> validate_number(:arrange_nudge_threshold,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: 50
+    )
     |> validate_subset(:scenarios, known_scenarios)
     |> validate_inclusion(:default_kind, Jarvis2.Herdr.Actions.agent_kinds())
     |> validate_inclusion(:default_thinking, Jarvis2.Runs.Run.thinking_levels())

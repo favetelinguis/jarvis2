@@ -25,6 +25,56 @@ defmodule Jarvis2Web.KanbanLiveTest do
     assert Kanban.get_card(card.id).column == :scratch
   end
 
+  test "the add card form creates dependencies atomically", %{conn: conn} do
+    {:ok, prerequisite} = Kanban.create_card(%{title: "Prerequisite", cwd: File.cwd!()})
+    {:ok, _} = Kanban.create_card(%{title: "Other project", cwd: "/tmp"})
+    {:ok, view, _} = live(conn, "/kanban")
+    view |> form("#card-form", card: %{title: "Dependent", cwd: File.cwd!()}) |> render_change()
+    assert has_element?(view, "#card-blocked-by option[value='#{prerequisite.id}']")
+    refute has_element?(view, "#card-blocked-by option", "Other project")
+
+    view
+    |> form("#card-form",
+      card: %{title: "Dependent", cwd: File.cwd!(), blocked_by: [prerequisite.id]}
+    )
+    |> render_submit()
+
+    dependent = Enum.find(Kanban.list_cards(), &(&1.title == "Dependent"))
+    assert {:blocked, [_]} = Kanban.dependency_state(dependent)
+  end
+
+  test "dependency badges and panel edit and freeze dependencies", %{conn: conn} do
+    {:ok, a} = Kanban.create_card(%{title: "A", cwd: File.cwd!()})
+    {:ok, b} = Kanban.create_card(%{title: "B", cwd: File.cwd!()})
+    {:ok, _} = Kanban.add_dependency(a, b)
+    {:ok, view, _} = live(conn, "/kanban/cards/#{a.id}")
+    assert has_element?(view, "#card-#{a.id}", "Blocked · 1")
+    assert has_element?(view, "#dependencies-#{a.id}", "B")
+    refute has_element?(view, "#dependency-prerequisite option[value='#{a.id}']")
+    view |> element("#dependencies-#{a.id} button", "Remove") |> render_click()
+    refute has_element?(view, "#card-#{a.id}", "Blocked · 1")
+
+    view
+    |> form("#dependency-form", %{"blocked_by" => b.id, "needs" => "done"})
+    |> render_submit()
+
+    assert has_element?(view, "#card-#{a.id}", "Blocked · 1")
+    render_hook(view, "move_card", %{id: a.id, to: "agent"})
+    assert_reply view, %{ok: false}
+    assert render(view) =~ "Blocked by: B (needs done)"
+    a |> Ecto.Changeset.change(column: :agent) |> Repo.update!()
+    Phoenix.PubSub.local_broadcast(Jarvis2.PubSub, Kanban.topic(), {:card, a})
+
+    assert has_element?(
+             view,
+             "#dependencies-#{a.id}",
+             "Dependencies are frozen once a card starts"
+           )
+
+    refute has_element?(view, "#dependency-form")
+    assert has_element?(view, "#card-#{a.id}", "Stale")
+  end
+
   test "skill reports are grouped by stage and update the open panel", %{conn: conn} do
     {:ok, run} = Runs.create_run(%{name: "planner", task: "test", cwd: File.cwd!()})
     {:ok, card} = Kanban.create_card(%{title: "Idea", cwd: File.cwd!()})

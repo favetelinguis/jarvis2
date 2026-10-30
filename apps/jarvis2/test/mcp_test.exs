@@ -164,7 +164,7 @@ defmodule Jarvis2.MCPTest do
            )
   end
 
-  test "board endpoint advertises only card creation and refuses other tools", ctx do
+  test "board endpoint advertises board tools and refuses other tools", ctx do
     ctx = Map.put(ctx, :mcp_path, "/mcp/board")
 
     assert {200, _, %{"result" => %{"capabilities" => capabilities}}} =
@@ -185,8 +185,11 @@ defmodule Jarvis2.MCPTest do
     headers = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]
     rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
 
-    assert {200, _, %{"result" => %{"tools" => [%{"name" => "create_card"}]}}} =
+    assert {200, _, %{"result" => %{"tools" => tools}}} =
              rpc(ctx, headers, %{jsonrpc: "2.0", id: 2, method: "tools/list"})
+
+    assert Enum.sort(Enum.map(tools, & &1["name"])) ==
+             ~w(add_dependency create_card list_ready_cards remove_dependency)
 
     assert {200, _, %{"error" => _}} =
              rpc(ctx, headers, %{
@@ -211,7 +214,7 @@ defmodule Jarvis2.MCPTest do
              })
   end
 
-  test "stateless board requests also expose only the card tool", ctx do
+  test "stateless board requests also expose board tools", ctx do
     ctx = Map.put(ctx, :mcp_path, "/mcp/board")
     headers = [{"mcp-protocol-version", "2026-07-28"}]
 
@@ -220,7 +223,7 @@ defmodule Jarvis2.MCPTest do
       "io.modelcontextprotocol/clientCapabilities" => %{}
     }
 
-    assert {200, _, %{"result" => %{"tools" => [%{"name" => "create_card"}]}}} =
+    assert {200, _, %{"result" => %{"tools" => tools}}} =
              rpc(ctx, [{"mcp-method", "tools/list"} | headers], %{
                jsonrpc: "2.0",
                id: 1,
@@ -228,12 +231,91 @@ defmodule Jarvis2.MCPTest do
                params: %{_meta: meta}
              })
 
+    assert Enum.sort(Enum.map(tools, & &1["name"])) ==
+             ~w(add_dependency create_card list_ready_cards remove_dependency)
+
     assert {200, _, %{"error" => _}} =
              rpc(ctx, [{"mcp-method", "tools/call"}, {"mcp-name", "whoami"} | headers], %{
                jsonrpc: "2.0",
                id: 2,
                method: "tools/call",
                params: %{_meta: meta, name: "whoami", arguments: %{}}
+             })
+  end
+
+  test "run endpoint cannot edit dependencies through board tools or card creation", ctx do
+    {session, protocol} = initialize(ctx)
+    headers = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]
+    rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
+    {:ok, prerequisite} = Jarvis2.Kanban.create_card(%{title: "A", cwd: File.cwd!()})
+    {:ok, dependent} = Jarvis2.Kanban.create_card(%{title: "B", cwd: File.cwd!()})
+
+    for {name, args} <- [
+          {"add_dependency", %{card: dependent.id, blocked_by: prerequisite.id}},
+          {"remove_dependency", %{card: dependent.id, blocked_by: prerequisite.id}},
+          {"create_card", %{title: "C", cwd: File.cwd!(), blocked_by: [prerequisite.id]}}
+        ] do
+      assert {200, _, %{"error" => _}} =
+               rpc(ctx, headers, %{
+                 jsonrpc: "2.0",
+                 id: 88,
+                 method: "tools/call",
+                 params: %{name: name, arguments: args}
+               })
+    end
+
+    assert {:none, []} = Jarvis2.Kanban.dependency_state(dependent)
+    assert length(Jarvis2.Kanban.list_cards()) == 2
+  end
+
+  test "board dependencies are atomic and harness cannot remove human edges", ctx do
+    ctx = Map.put(ctx, :mcp_path, "/mcp/board")
+    {session, protocol} = initialize(ctx)
+    headers = [{"mcp-session-id", session}, {"mcp-protocol-version", protocol}]
+    rpc(ctx, headers, %{jsonrpc: "2.0", method: "notifications/initialized"})
+    cwd = File.cwd!()
+    {:ok, a} = Jarvis2.Kanban.create_card(%{title: "A", cwd: cwd})
+    {:ok, b} = Jarvis2.Kanban.create_card(%{title: "B", cwd: cwd})
+    {:ok, _} = Jarvis2.Kanban.add_dependency(a, b)
+    result = call_tool(ctx, headers, "list_ready_cards", %{cwd: cwd})
+    assert Enum.map(result["cards"], & &1["id"]) == [b.id]
+
+    assert {200, _, %{"result" => %{"isError" => true}}} =
+             rpc(ctx, headers, %{
+               jsonrpc: "2.0",
+               id: 13,
+               method: "tools/call",
+               params: %{name: "remove_dependency", arguments: %{card: a.id, blocked_by: b.id}}
+             })
+
+    before_count = length(Jarvis2.Kanban.list_cards())
+
+    assert {200, _, %{"result" => %{"isError" => true}}} =
+             rpc(ctx, headers, %{
+               jsonrpc: "2.0",
+               id: 14,
+               method: "tools/call",
+               params: %{
+                 name: "create_card",
+                 arguments: %{title: "new", cwd: cwd, blocked_by: [b.id, Ecto.UUID.generate()]}
+               }
+             })
+
+    assert length(Jarvis2.Kanban.list_cards()) == before_count
+
+    assert %{"id" => id} =
+             call_tool(ctx, headers, "create_card", %{title: "new", cwd: cwd, blocked_by: [b.id]})
+
+    assert Jarvis2.Kanban.get_card(id).arranged_at
+
+    assert %{"ok" => true} =
+             call_tool(ctx, headers, "remove_dependency", %{card: id, blocked_by: b.id})
+
+    assert %{"ok" => true} =
+             call_tool(ctx, headers, "add_dependency", %{
+               card: id,
+               blocked_by: b.id,
+               needs: "done"
              })
   end
 

@@ -44,6 +44,7 @@ defmodule Jarvis2Web.Router do
       live "/roles", RolesLive
       live "/harness", HarnessLive
       live "/kanban", KanbanLive.Index, :index
+      live "/kanban/graph", KanbanLive.Graph, :index
       live "/kanban/cards/:id", KanbanLive.Index, :show
       live "/kanban/cards/:id/answer", KanbanLive.Index, :answer
       live "/kanban/cards/:id/reopen", KanbanLive.Index, :reopen
