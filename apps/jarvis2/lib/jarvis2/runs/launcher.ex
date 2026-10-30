@@ -34,8 +34,9 @@ defmodule Jarvis2.Runs.Launcher do
       thinking,
       "--extension",
       @pi_extension,
+      "--no-skills",
       "--skill",
-      Path.join([:code.priv_dir(:jarvis2), "skills", "jarvis2-slide-deck"])
+      Application.fetch_env!(:jarvis2, :skills_dir)
     ] ++ if(session_id, do: ["--session-id", session_id], else: [])
   end
 

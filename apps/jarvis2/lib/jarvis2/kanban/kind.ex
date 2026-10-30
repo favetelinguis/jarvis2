@@ -87,6 +87,22 @@ defmodule Jarvis2.Kanban.Kind do
         }
       ]
     },
+    architecture: %{
+      label: "Architecture",
+      hint: "Name a module, subsystem or pain point, or leave open to scan the hot spots",
+      max_questions: 3,
+      max_body: 4_000,
+      deliverable: :html,
+      stages: [
+        %{
+          name: :main,
+          noun: "architecture report",
+          advance: nil,
+          max_deliverable: 200_000,
+          role: "architect"
+        }
+      ]
+    },
     refine: %{
       label: "Refine",
       hint: "Paste the Jira ticket text",
@@ -104,7 +120,7 @@ defmodule Jarvis2.Kanban.Kind do
     }
   }
 
-  def all, do: [:plan, :research, :explain, :review, :refine, :slides]
+  def all, do: [:plan, :research, :explain, :review, :refine, :slides, :architecture]
   def get(kind), do: Map.fetch!(@kinds, kind)
   def deliverable_type(kind), do: Map.get(get(kind), :deliverable, :markdown)
   def stages(kind), do: get(kind).stages
@@ -113,5 +129,17 @@ defmodule Jarvis2.Kanban.Kind do
   def noun(kind), do: noun(kind, initial_stage(kind))
   def noun(kind, name), do: stage(kind, name).noun
 
-  def protocol(_kind, _name, prompt), do: String.trim(prompt)
+  @human_protocol """
+  ## Working with the human
+
+  The human does not read your terminal output; only Jarvis2 MCP tool calls reach them. Keep chat output minimal.
+  Ask only with `ask_questions`, then end your turn; the answers arrive as your next message.
+  Finish only with `submit_deliverable`. Find facts yourself; never guess decisions, ask.
+  Whenever you load a skill, call `report_skill` with its name and why you loaded it.
+  When the card is about the project in the working directory, read GLOSSARY.md and docs/adr/ if they exist. Use the glossary's terms exactly in everything you write, and say so at once when a term or the code conflicts with it or an ADR.
+  """
+
+  @doc "The role prompt followed by the instructions every kanban role shares."
+  def protocol(_kind, _name, prompt),
+    do: String.trim(prompt) <> "\n\n" <> String.trim(@human_protocol)
 end

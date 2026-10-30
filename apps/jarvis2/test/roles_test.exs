@@ -59,20 +59,60 @@ defmodule Jarvis2.RolesTest do
 
     for {kind, stage} <- StepRoles.steps() do
       assert {:ok, role} = Roles.get(Jarvis2.Kanban.Kind.stage(kind, stage).role)
-      assert role.prompt =~ "## Working with the human"
-      assert role.prompt =~ "call `report_skill` with its name and why you loaded it"
+      refute role.prompt =~ "## Working with the human"
+
+      protocol = Jarvis2.Kanban.Kind.protocol(kind, stage, role.prompt)
+      assert String.starts_with?(protocol, role.prompt)
+      assert protocol =~ "## Working with the human"
+      assert protocol =~ "ask_questions"
+      assert protocol =~ "submit_deliverable"
+      assert protocol =~ "call `report_skill` with its name and why you loaded it"
     end
 
-    for name <- ~w(researcher explainer reviewer slide-maker refiner) do
+    for name <- ~w(researcher explainer reviewer slide-maker refiner architect) do
       assert {:ok, role} = Roles.get(name)
       assert role.prompt =~ "Do not edit files, commit, push, or comment on or approve a PR."
     end
+  end
 
-    assert {:ok, slide_role} = Roles.get("slide-maker")
-    assert slide_role.prompt =~ "jarvis2-slide-deck"
+  test "every skill is valid and every skill a role loads exists" do
+    Application.put_env(:jarvis2, :roles_dir, Path.expand("../../../roles", __DIR__))
+    skills_dir = Path.expand("../../../skills", __DIR__)
 
-    assert File.regular?(
-             Path.join([:code.priv_dir(:jarvis2), "skills", "jarvis2-slide-deck", "SKILL.md"])
-           )
+    skills =
+      for dir <- File.ls!(skills_dir), File.dir?(Path.join(skills_dir, dir)) do
+        text = File.read!(Path.join([skills_dir, dir, "SKILL.md"]))
+        assert text =~ "name: #{dir}\n"
+        assert text =~ ~r/^description: \S/m
+        dir
+      end
+
+    for {:ok, role} <- Roles.list() do
+      [_, section] = String.split(role.prompt, "## Skills\n", parts: 2)
+      section = section |> String.split("\n## ", parts: 2) |> hd()
+
+      named =
+        Regex.scan(~r/`([a-z0-9]+(?:-[a-z0-9]+)*)`/, section)
+        |> Enum.map(&List.last/1)
+        |> Enum.uniq()
+
+      assert named != [], "#{role.name} loads no skill"
+      assert named -- skills == [], "#{role.name} names a missing skill"
+    end
+  end
+
+  test "the architecture report template satisfies the HTML contract" do
+    template =
+      Path.expand(
+        "../../../skills/improve-codebase-architecture/references/template.html",
+        __DIR__
+      )
+
+    assert :ok = Jarvis2.Kanban.Slides.validate(File.read!(template))
+  end
+
+  test "the slide template satisfies the deck contract" do
+    template = Path.expand("../../../skills/slide-deck/references/template.html", __DIR__)
+    assert :ok = Jarvis2.Kanban.Slides.validate(File.read!(template))
   end
 end

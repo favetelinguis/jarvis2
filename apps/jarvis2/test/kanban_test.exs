@@ -74,7 +74,7 @@ defmodule Jarvis2.KanbanTest do
   test "card kinds have independent input and question limits" do
     assert card().kind == :plan
 
-    for kind <- [:plan, :research, :explain, :review, :refine, :slides] do
+    for kind <- [:plan, :research, :explain, :review, :refine, :slides, :architecture] do
       limit = if kind == :plan, do: 2_000, else: 4_000
 
       attrs = %{
@@ -91,7 +91,15 @@ defmodule Jarvis2.KanbanTest do
 
     assert {:error, _} = Kanban.create_card(%{title: "x", cwd: File.cwd!(), kind: "unknown"})
 
-    for {kind, max} <- [plan: 8, research: 4, explain: 2, review: 3, refine: 4, slides: 4] do
+    for {kind, max} <- [
+          plan: 8,
+          research: 4,
+          explain: 2,
+          review: 3,
+          refine: 4,
+          slides: 4,
+          architecture: 3
+        ] do
       {:ok, card} = Kanban.create_card(%{title: "x", cwd: File.cwd!(), kind: kind})
       {:ok, run} = Runs.create_run(%{name: "test", task: "test", cwd: card.cwd})
       card |> Ecto.Changeset.change(column: :agent, run_id: run.id) |> Repo.update!()
@@ -113,7 +121,8 @@ defmodule Jarvis2.KanbanTest do
     card = card()
     role = %Jarvis2.Roles.Role{prompt: "Do the role's work."}
     task = Jarvis2.Kanban.Prompt.build(card, [], nil, role: role)
-    assert task =~ "Do the role's work.\n\nCard: Private idea\nIdea: Private body"
+    assert task =~ "Do the role's work.\n\n## Working with the human\n\n"
+    assert task =~ "\n\nCard: Private idea\nIdea: Private body"
     assert Jarvis2.Runs.Prompt.build(%{name: "label", task: task}) == task
     for tool <- ~w(ask_human request_approval submit_result), do: refute(task =~ tool)
     assert Jarvis2.Runs.Prompt.build(%{task: "  unmodified task\n"}) == "  unmodified task\n"
@@ -397,11 +406,12 @@ defmodule Jarvis2.KanbanTest do
 
   test "kind prompts keep the card and feedback within the task limit" do
     for {kind, level, heading} <- [
-          {:plan, "HEAVY", "Intent and scope"},
-          {:research, "MEDIUM", "Confidence and unknowns"},
-          {:explain, "LIGHT", "Walkthrough"},
-          {:review, "LIGHT-MEDIUM", "Verdict: REQUEST CHANGES"},
-          {:refine, "MEDIUM", "Acceptance criteria"}
+          {:plan, "HEAVY", "`requirements-engineering`"},
+          {:research, "MEDIUM", "`research`"},
+          {:explain, "LIGHT", "`explain-change`"},
+          {:review, "LIGHT", "`code-review`"},
+          {:refine, "MEDIUM", "Acceptance criteria"},
+          {:architecture, "MEDIUM", "`improve-codebase-architecture`"}
         ] do
       max = Jarvis2.Kanban.Kind.get(kind).max_body
       body = String.duplicate("b", max)
@@ -431,7 +441,7 @@ defmodule Jarvis2.KanbanTest do
       assert prompt =~ feedback
       assert prompt =~ level
       assert prompt =~ heading
-      assert prompt =~ "keep chat output minimal"
+      assert prompt =~ "Keep chat output minimal"
       assert String.valid?(prompt)
       restored = build_prompt(card, [round], feedback, restored: true)
       assert byte_size(restored) <= 65_536

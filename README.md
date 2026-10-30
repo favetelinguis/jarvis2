@@ -29,6 +29,7 @@ Watch the session with `herdr session attach jarvis2`.
 | `JARVIS2_STATE_DIR` | token, cookie secret and `jarvis2.db` (default `~/.local/state/jarvis2`)   |
 | `JARVIS2_SCENARIOS` | optional comma-separated lock-down of the actions that may ever be enabled |
 | `JARVIS2_ROLES_DIR` | role Markdown directory (default: umbrella root `roles/`) |
+| `JARVIS2_SKILLS_DIR` | Pi run skills directory (default: umbrella root `skills/`) |
 
 A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bin/jarvis2 start`.
 
@@ -47,7 +48,9 @@ A release works too: `MIX_ENV=prod mix release` then `_build/prod/rel/jarvis2/bi
 
 Pi runs explicitly load `.pi/jarvis2-run.js`, which registers the `jarvis2_run` MCP server using the
 run's URL and Herdr pane headers, regardless of the run's working directory. Its path is temporarily
-hardcoded to `/home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js`. Other Pi sessions can use the
+hardcoded to `/home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js`. Pi runs advertise only skills
+from `JARVIS2_SKILLS_DIR`, not skills discovered from the host or the run workspace. Skill instructions
+are loaded on demand. Other Pi sessions can use the
 repository's `.pi/mcp.json` after project trust, or add its `jarvis2` entry to `~/.pi/agent/mcp.json`.
 
 ## Screens
@@ -99,8 +102,8 @@ tab if the planner pane is gone). The accepted plan remains visible alongside th
 Dragging a Done card back to Agent instead reopens its current stage with feedback. Archive and restore
 retain the current stage.
 
-Research, Explain, Review, Refine and Slides have a single stage and instruct the agent not to edit or
-publish changes. Slides delivers a self-contained HTML deck with an in-board preview and browser download.
+Research, Explain, Review, Refine, Slides and Architecture have a single stage and instruct the agent not to edit or
+publish changes. Slides delivers a self-contained HTML deck with an in-board preview and browser download. Architecture scans a codebase for deepening opportunities and delivers an HTML report the same way; paste a candidate's "Plan card idea" into a Plan card to design and implement it.
 Planning retains its
 existing prompt, while implementation explicitly allows edits and tests but asks the agent not to commit,
 push or alter `PLAN.md`. These are prompt rules, not a sandbox: agents can make real changes. Review the
@@ -131,11 +134,17 @@ Role instructions go here.
 The name must match the filename stem, use lowercase letters, digits and single hyphens, and be at
 most 64 bytes. Model and effort are optional; Settings supplies omitted values. Effort is one of
 `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Unknown frontmatter keys are ignored.
+Jarvis2 appends one shared "Working with the human" section (questions, results, skill reports) to every role prompt, so role files hold only the job, its restrictions and which skills to load, in order. Domain detail lives in `skills/<name>/SKILL.md`.
 Role instructions govern the agent's job and any restrictions; they are not a sandbox. Missing or
 invalid mapped roles prevent a new step from starting. Agents report loaded skills with `report_skill`;
 the card shows these self-reports by stage, including across reopen and restore. A skill that an agent
-fails to report is not visible. Pi runs also receive the bundled `jarvis2-slide-deck` skill so it is
-available in any working directory.
+fails to report is not visible. Pi runs receive the skills in `skills/` (`grilling`, `requirements-engineering`, `implement-plan`,
+`grill-me`, `grill-with-docs`, `tdd`, `domain-modeling`, `codebase-design`, `improve-codebase-architecture`, `code-review`, `research`,
+`explain-change`, `slide-deck`, `external-integration-design`) in any working directory.
+
+`GLOSSARY.md` (domain terms) and `docs/adr/` (hard-to-reverse decisions) in the project root are the shared
+language: every role reads them and uses their terms. Read-only roles never edit them; they draft the changes in
+their deliverable (a plan's Language and Decisions sections), and the implementer writes them with the code.
 
 ## Safety model
 

@@ -529,6 +529,7 @@ defmodule Jarvis2.RunsTest do
     test "in live mode creates a tab, starts Pi with the model and delivers the task",
          ctx do
       live!()
+      config(:skills_dir, ctx.cwd)
       {:ok, run} = Runs.create_run(%{name: "demo", task: "write the report", cwd: ctx.cwd})
       Phoenix.PubSub.subscribe(Jarvis2.PubSub, Runs.topic())
 
@@ -553,11 +554,8 @@ defmodule Jarvis2.RunsTest do
       assert start["kind"] == "pi"
 
       assert start["args"] ==
-               ~w(--provider openrouter --model openai/gpt-6-luna --thinking low --extension /home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js) ++
-                 [
-                   "--skill",
-                   Path.join([:code.priv_dir(:jarvis2), "skills", "jarvis2-slide-deck"])
-                 ]
+               ~w(--provider openrouter --model openai/gpt-6-luna --thinking low --extension /home/favetelinguis/repos/jarvis2/.pi/jarvis2-run.js --no-skills) ++
+                 ["--skill", ctx.cwd]
 
       assert_receive {:request, "agent.prompt", %{"target" => "w1:p9", "text" => text}}
       assert text == "write the report"

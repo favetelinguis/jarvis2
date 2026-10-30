@@ -56,7 +56,7 @@ defmodule Jarvis2.MCP.Server do
      "Report every skill you load for a kanban stage, giving its name (at most 100 bytes) and why you loaded it (at most 500 bytes). This does not end your turn.",
      %{name: {:required, :string}, reason: {:required, :string}}},
     {"submit_deliverable",
-     "Submit the completed kanban deliverable and end your turn. For slides, content is one complete self-contained HTML document.",
+     "Submit the completed kanban deliverable and end your turn. For slides and architecture reports, content is one complete self-contained HTML document.",
      %{content: {:required, :string}}},
     {"submit_result",
      "Finish an ad-hoc run with a summary and optional artifact paths or URLs. For kanban use submit_deliverable instead.",
